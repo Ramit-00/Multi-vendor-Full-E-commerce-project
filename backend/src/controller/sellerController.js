@@ -1,9 +1,9 @@
 
 
-import sellerService from '../service/SellerService.js';
+import sellerService from '../service/sellerService.js';
 import VerificationCode from '../model/VerificationCode.js';
 import jwtProvider from '../util/jwtProvider.js';
-import UserRole from '../domain/UserRole.js';
+import userRoles from '../domain/userRole.js';
 
 class SellerController {
 
@@ -11,8 +11,8 @@ class SellerController {
     try {
       const profile = await req.seller;  // The seller object is attached to the request by the sellerMiddleware
       const jwt = req.headers.authorization.split(' ')[1]; // Assuming JWT is sent in the Authorization header
-      const seller = await sellerService.getSellerProfile(jwt);
-      res.status(200).json(seller);
+      const sellerData = await sellerService.getSellerProfile(jwt);
+      res.status(200).json(sellerData);
     } catch (error) {
       res.status(error instanceof Error ? 404 : 500).json({ error: error.message });
     }   
@@ -21,8 +21,8 @@ class SellerController {
   async createSeller(req, res) {
     try {
       const sellerData = req.body;
-      const seller = await sellerService.createSeller(sellerData);
-      res.status(201).json({ message: 'Seller created successfully', seller });
+      const newSeller = await sellerService.createSeller(sellerData);
+      res.status(201).json({ message: 'Seller created successfully', seller: newSeller });
     } catch (error) {
       res.status(error instanceof Error ? 404 : 500).json({ error: error.message });
     }
@@ -31,8 +31,8 @@ class SellerController {
   async getAllSellers(req, res) {
     try{
       const status = req.query.status;
-      const seller = await sellerService.getAllSellers(status);
-      res.status(200).json(seller);
+      const sellersList = await sellerService.getAllSellers(status);
+      res.status(200).json(sellersList);
     } catch(error){
       res.status(error instanceof Error ? 404 : 500).json({ error: error.message });
     }
@@ -40,9 +40,9 @@ class SellerController {
 
   async updateSeller(req, res) {
     try {
-      const sellerId = req.params.id;
+      const existingSeller = req.seller;
       const sellerData = req.body;
-      const updatedSeller = await sellerService.updateSeller(sellerId, sellerData);
+      const updatedSeller = await sellerService.updateSeller(existingSeller.id, sellerData);
       res.status(200).json({ message: 'Seller updated successfully', updatedSeller });
     } catch (error) {
       res.status(error instanceof Error ? 404 : 500).json({ error: error.message });
@@ -51,8 +51,8 @@ class SellerController {
 
   async deleteSeller(req, res) {
     try{
-      const sellerId = req.params.id;
-      await sellerService.deleteSeller(sellerId);
+      const existingSeller = req.seller;
+      await sellerService.deleteSeller(existingSeller.id);
       res.status(200).json({ message: 'Seller account deleted successfully' });
     } catch (error) {
       res.status(error instanceof Error ? 404 : 500).json({ error: error.message });
@@ -71,19 +71,19 @@ class SellerController {
   async verifyLoginOtp(req, res) {
     try{
       const{ email, otp } = req.body;
-      const seller = await sellerService.getSellerByEmail(email);
-      const verificationCode = await VerificationCode.findOne({ email });
+      const sellerData = await sellerService.getSellerByEmail(email);
+      const verificationCodeData = await VerificationCode.findOne({ email });
 
-      if(!verificationCode || verificationCode.otp !== otp){
+      if(!verificationCodeData || verificationCodeData.otp !== otp){
         throw new Error('Invalid OTP');
       }
 
-      const token = jwtProvider.createJWT({ email });
+      const token = jwtProvider.createJwt({ email });
 
       const authResponse = {
         message: "Login successful",
         jwt: token,
-        role:UserRole.SELLER
+        role:userRoles.SELLER
       }
 
       return res.status(200).json(authResponse);

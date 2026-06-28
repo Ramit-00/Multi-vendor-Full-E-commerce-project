@@ -1,7 +1,9 @@
+import { User } from '../model/User.js';
+import jwt from 'jsonwebtoken';
 import jwtProvider from '../util/jwtProvider.js';
-import sellerService from '../service/sellerService.js';
+import userService from '../service/userService.js';
 
-export const sellerAuthMiddleware = async (req,res,next) => {
+export const authMiddleware = async (req,res,next) => {
   try{
     const authHeader = req.headers.authorization;
     if(!(authHeader && authHeader.startsWith('Bearer'))){
@@ -21,17 +23,17 @@ export const sellerAuthMiddleware = async (req,res,next) => {
 
     let email = jwtProvider.getEmailFromJwt(token);
 
-    const sellerData = await sellerService.getSellerByEmail(email);
-    req.seller = sellerData;  // Attach seller object to request for use in subsequent middleware or route handlers
+    const userData = await userService.findUserByEmail(email);
+    req.user = userData;  // Attach user object to request for use in subsequent middleware or route handlers
 
     next();
 
   } catch(error){
     res.status(500).json({
       success:false,
-      message:`Error in authenticating seller: ${error.message}`
+      message:`Error in authenticating user: ${error.message}`
     })
   }
 }
 
-export default sellerAuthMiddleware;
+export default authMiddleware;
