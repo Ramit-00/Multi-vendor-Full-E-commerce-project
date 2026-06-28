@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import UserRole from '../domain/UserRole.js';
-import AccountStatus from '../domain/AccountStatus.js';
+import userRoles from '../domain/userRole.js';
+import accountStatus from '../domain/accountStatus.js';
 
 const sellerSchema = new mongoose.Schema({
   sellerName:{type:String,required:true},
@@ -26,20 +26,20 @@ const sellerSchema = new mongoose.Schema({
   GSTIN:{type:String,required:true},
   role:{
     type:String,
-    enum:[UserRole.SELLER],
-    default:UserRole.SELLER
+    enum:[userRoles.SELLER],
+    default:userRoles.SELLER
   },
   accountStatus:{
     type:String,
     enum:[
-      AccountStatus.PENDING_VERIFICATION,
-      AccountStatus.ACTIVE,
-      AccountStatus.SUSPENDED,  
-      AccountStatus.DEACTIVATED,
-      AccountStatus.BANNED,
-      AccountStatus.CLOSED],
+      accountStatus.PENDING_VERIFICATION,
+      accountStatus.ACTIVE,
+      accountStatus.SUSPENDED,  
+      accountStatus.DEACTIVATED,
+      accountStatus.BANNED,
+      accountStatus.CLOSED],
 
-    default:AccountStatus.PENDING_VERIFICATION
+    default:accountStatus.PENDING_VERIFICATION
     
   }
 

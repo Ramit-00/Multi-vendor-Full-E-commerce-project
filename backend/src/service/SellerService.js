@@ -28,24 +28,24 @@ class SellerService {
   }
 
   async getSellerProfile(jwt){
-    const email = jwtProvider.getEmailFromJWT(jwt);
+    const email = jwtProvider.getEmailFromJwt(jwt);
     return this.getSellerByEmail(email);
   }
 
   async getSellerByEmail(email){
-    const seller = await Seller.findOne({ email });
-    if (!seller) {
+    const sellerData = await Seller.findOne({ email });
+    if (!sellerData) {
       throw new Error('Seller not found');
     }
-    return seller;
+    return sellerData;
   }
 
   async getSellerById(sellerId){
-    const seller = await Seller.findById(sellerId);
-    if (!seller) {
+    const sellerData = await Seller.findById(sellerId);
+    if (!sellerData) {
       throw new Error('Seller not found');
     }
-    return seller;
+    return sellerData;
   }
 
   async getAllSellers(status){

@@ -5,11 +5,11 @@ class JwtProvider {
     this.secretKey = process.env.SECRET_KEY;
   }
 
-  createJWT(payload) {    // email as payload
+  createJwt(payload) {    // email as payload
     return jwt.sign(payload, this.secretKey, { expiresIn: "10m" });
   }
 
-  getEmailFromJWT(token) {
+  getEmailFromJwt(token) {
     try {
       const decodedToken = jwt.verify(token, this.secretKey);
       return decodedToken.email;
@@ -18,7 +18,7 @@ class JwtProvider {
     }
   }
 
-  verifyJWT(token) {
+  verifyJwt(token) {
     try {
       return jwt.verify(token, this.secretKey);
     } catch (error) {

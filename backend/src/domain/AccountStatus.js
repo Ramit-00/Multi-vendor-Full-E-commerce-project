@@ -1,4 +1,4 @@
-const AccountStatus = Object.freeze({
+const accountStatus = Object.freeze({
   PENDING_VERIFICATION: 'PENDING_VERIFICATION',
   ACTIVE: 'ACTIVE',
   SUSPENDED: 'SUSPENDED',
@@ -7,4 +7,4 @@ const AccountStatus = Object.freeze({
   CLOSED: 'CLOSED'
 });
 
-export default AccountStatus;
+export default accountStatus;
