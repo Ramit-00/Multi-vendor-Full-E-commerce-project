@@ -77,8 +77,33 @@ class ProductService {
       const product = await Product.findOne(productId);
 
       if(!product){
-        throw new error()
+        throw new Error("Product not found")
       }
+      return product;
+    }catch (error){
+      throw new Error(error.message)
     }
   }
+
+  async searchProduct(query){
+    
+    try{
+      const products = await Product.find({title: new RegExp(query, "i")}) //The "i" flag means ignore case.
+      return products;
+
+    }catch (error){
+      throw new Error(error.message)
+    }
+  }
+
+  async getProductsBySellerId(sellerId){
+    return await Products.find({seller:seller_id})
+  }
+
+  async getAllProducts(req){
+    filterQuery = {};
+
+    if()
+  }
+
 }
