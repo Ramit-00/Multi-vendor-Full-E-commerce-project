@@ -1,7 +1,7 @@
-const userRoles = Object.freeze({
-  ADMIN: 'ROLE_ADMIN',
-  CUSTOMER: 'ROLE_CUSTOMER',
-  SELLER: 'ROLE_SELLER',
+const UserRoles = Object.freeze({
+    CUSTOMER: "ROLE_CUSTOMER",
+    SELLER: "ROLE_SELLER",
+    ADMIN: "ROLE_ADMIN"
 });
 
-export default userRoles;
+module.exports = UserRoles;
