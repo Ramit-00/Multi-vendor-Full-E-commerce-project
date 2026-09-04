@@ -6,8 +6,21 @@ require('dotenv').config();
 
 const connectDB = async () => {
   try {
+    mongoose.connection.on('connected', () => {
+      console.log('MongoDB connection active and verified.');
+    });
+
+    mongoose.connection.on('error', (err) => {
+      console.error('MongoDB connection error:', err.message);
+    });
+
+    mongoose.connection.on('disconnected', () => {
+      console.warn('MongoDB connection lost. Reconnecting...');
+    });
+
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 20000,
+      connectTimeoutMS: 20000,
     });
 
     console.log(`MongoDB connected: ${conn.connection.host}`);

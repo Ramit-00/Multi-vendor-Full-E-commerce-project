@@ -3,6 +3,8 @@ const UserError = require('../exceptions/UserError');
 const Address = require('../models/Address');
 const User = require('../models/User');
 const mongoose = require('mongoose');
+const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 
 const getUserProfileByJwt = async (req, res) => {
     try {
@@ -41,9 +43,23 @@ const addAddress = async (req, res) => {
 
         if (dbConnected) {
             const createdAddress = await Address.create(addressData);
-            let dbUser = userId && !String(userId).startsWith('offline_') ? await User.findById(userId) : null;
+            let dbUser = userId && mongoose.Types.ObjectId.isValid(userId) ? await User.findById(userId) : null;
             if (!dbUser && email) {
                 dbUser = await User.findOne({ email });
+            }
+            if (!dbUser && email) {
+                const namePart = email.split('@')[0];
+                const cleanName = namePart ? (namePart.charAt(0).toUpperCase() + namePart.slice(1)) : 'Customer';
+                const randomPassword = crypto.randomBytes(16).toString('hex');
+                const hashedPassword = await bcrypt.hash(randomPassword, 10);
+                dbUser = new User({
+                    email,
+                    fullName: user?.fullName || cleanName,
+                    role: user?.role || 'ROLE_CUSTOMER',
+                    status: 'ACTIVE',
+                    addresses: [],
+                    password: hashedPassword,
+                });
             }
             if (dbUser) {
                 if (!Array.isArray(dbUser.addresses)) dbUser.addresses = [];
@@ -59,10 +75,12 @@ const addAddress = async (req, res) => {
                 _id: `addr_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
             };
             if (!fallbackUser) {
+                const namePart = email.split('@')[0];
+                const cleanName = namePart ? (namePart.charAt(0).toUpperCase() + namePart.slice(1)) : 'Customer';
                 fallbackUser = {
                     _id: userId || `user_${Date.now()}`,
                     email,
-                    fullName: user?.fullName || 'Valued Customer',
+                    fullName: user?.fullName || cleanName,
                     role: user?.role || 'ROLE_CUSTOMER',
                     addresses: [newAddress],
                 };
@@ -90,7 +108,7 @@ const deleteAddress = async (req, res) => {
         const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
 
         if (dbConnected) {
-            let dbUser = userId && !String(userId).startsWith('offline_') ? await User.findById(userId) : null;
+            let dbUser = userId && mongoose.Types.ObjectId.isValid(userId) ? await User.findById(userId) : null;
             if (!dbUser && email) {
                 dbUser = await User.findOne({ email });
             }
