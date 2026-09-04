@@ -23,7 +23,16 @@ const authMiddleware = async (req, res, next) => {
     if (!dbConnected && process.env.ALLOW_OFFLINE === 'true') {
       try {
         const payload = jwtProvider.verifyJwt(token);
-        req.user = { email: payload.email, _id: `offline_${payload.email}`, role: payload.role || 'ROLE_CUSTOMER' };
+        const email = (payload.email || '').toLowerCase().trim();
+        const AuthService = require('../services/AuthService');
+        const fallbackUser = (AuthService.fallbackUsers && AuthService.fallbackUsers.get(email)) || {
+          email,
+          _id: `offline_${email}`,
+          fullName: 'Valued Customer',
+          role: payload.role || 'ROLE_CUSTOMER',
+          addresses: [],
+        };
+        req.user = fallbackUser;
         return next();
       } catch (err) {
         return res.status(401).json({ message: 'Invalid token' });
@@ -33,6 +42,10 @@ const authMiddleware = async (req, res, next) => {
     const user = await UserService.findUserProfileByJwt(token)
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.status === 'BANNED' || user.status === 'SUSPENDED') {
+      return res.status(403).json({ message: "Access denied: Your account has been suspended or banned by administration." });
     }
 
     req.user = user;

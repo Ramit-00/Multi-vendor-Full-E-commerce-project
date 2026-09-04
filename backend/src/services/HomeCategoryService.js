@@ -9,11 +9,19 @@ class HomeCategoryService {
 
     // Create multiple home categories or return existing ones
     async createCategories(homeCategories) {
-        const existingCategories = await HomeCategory.find();
-        if (existingCategories.length === 0) {
-            return await HomeCategory.insertMany(homeCategories);
+        const mongoose = require('mongoose');
+        try {
+            if (mongoose.connection && mongoose.connection.readyState === 1) {
+                const existingCategories = await HomeCategory.find();
+                if (existingCategories.length === 0) {
+                    return await HomeCategory.insertMany(homeCategories);
+                }
+                return existingCategories;
+            }
+        } catch (e) {
+            console.warn('[HomeCategoryService] MongoDB unavailable, using fallback categories');
         }
-        return existingCategories;
+        return homeCategories;
     }
 
     // Update an existing home category

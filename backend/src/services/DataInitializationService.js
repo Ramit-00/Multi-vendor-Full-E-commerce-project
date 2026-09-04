@@ -4,32 +4,35 @@ const bcrypt = require('bcrypt');
 
 class DataInitializationService {
   async initializeAdminUser() {
-    const adminEmail = 'codewithzosh@gmail.com';
-    const adminPassword = 'codewithzosh';
+    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@ecom.com').toLowerCase().trim();
+    const adminPassword = process.env.ADMIN_PASSWORD || 'AdminSecurePassword!2024';
     
     try {
-      // Check if an admin user already exists
-      const adminExists = await User.findOne({ email: adminEmail });
+      const hashedPassword = await bcrypt.hash(adminPassword, 10);
+      let adminUser = await User.findOne({ email: adminEmail });
 
-      if (!adminExists) {
-        // Hash the admin password
-        const hashedPassword = await bcrypt.hash(adminPassword, 10);
-
-        // Create the admin user
-        const adminUser = new User({
-          fullName: 'E-COM Admin',
+      if (!adminUser) {
+        adminUser = new User({
+          fullName: 'Master Administrator',
           email: adminEmail,
           password: hashedPassword,
           role: 'ROLE_ADMIN',
+          accountType: 'ADMIN',
+          status: 'ACTIVE'
         });
-
         await adminUser.save();
-        console.log('Admin user created successfully!');
+        console.log(`[AdminInit] Master Admin initialized: ${adminEmail}`);
       } else {
-        console.log('Admin user already exists.');
+        // Ensure role, accountType, status and password hash are active and in sync
+        adminUser.role = 'ROLE_ADMIN';
+        adminUser.accountType = 'ADMIN';
+        adminUser.status = 'ACTIVE';
+        adminUser.password = hashedPassword;
+        await adminUser.save();
+        console.log(`[AdminInit] Master Admin verified & updated: ${adminEmail}`);
       }
     } catch (error) {
-      console.error('Error during admin initialization:', error);
+      console.error('[AdminInit] Error during admin initialization:', error.message);
     }
   }
 }

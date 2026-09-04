@@ -3,6 +3,7 @@ import { ThemeProvider, CssBaseline } from '@mui/material';
 import customeTheme from './Theme/customeTheme';
 
 import { Route, Routes, useNavigate } from 'react-router-dom';
+import ScrollToTop from './components/ScrollToTop';
 
 import SellerDashboard from './seller/pages/SellerDashboard/SellerDashboard';
 import CustomerRoutes from './routes/CustomerRoutes';
@@ -13,20 +14,27 @@ import { useAppDispatch, useAppSelector } from './Redux Toolkit/Store';
 import { useEffect } from 'react';
 import { fetchSellerProfile } from './Redux Toolkit/Seller/sellerSlice';
 import BecomeSeller from './customer/pages/BecomeSeller/BecomeSeller';
-import AdminAuth from './admin/pages/Auth/AdminAuth';
+import AdminSecretGate from './admin/pages/Auth/AdminSecretGate';
+import AdminGuard from './admin/components/AdminGuard';
 import { fetchUserProfile } from './Redux Toolkit/Customer/UserSlice';
 import { createHomeCategories } from './Redux Toolkit/Customer/Customer/AsyncThunk';
 import { homeCategories } from './data/homeCategories';
 
 function App() {
-  const dispatch = useAppDispatch()
-  const { auth, sellerAuth, user } = useAppSelector(store => store)
-const navigate=useNavigate();
+  const dispatch = useAppDispatch();
+  const { auth, sellerAuth } = useAppSelector((store) => store);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const activeRole = localStorage.getItem("role");
+    const adminJwt = localStorage.getItem("admin_jwt");
     const sellerJwt = localStorage.getItem("seller_jwt");
     const customerJwt = localStorage.getItem("customer_jwt") || localStorage.getItem("jwt");
+
+    // Strictly isolate Admin sessions: do NOT fetch seller profile or customer profile
+    if (activeRole === "ROLE_ADMIN" || adminJwt) {
+      return;
+    }
 
     if (activeRole === "ROLE_SELLER" || sellerJwt) {
       dispatch(fetchSellerProfile(sellerJwt || customerJwt || ""));
@@ -36,32 +44,38 @@ const navigate=useNavigate();
   }, [auth.jwt, sellerAuth.jwt, dispatch, navigate]);
 
   useEffect(() => {
-    dispatch(createHomeCategories(homeCategories))
-    // dispatch(fetchHomePageData())
-  }, [dispatch])
+    dispatch(createHomeCategories(homeCategories));
+  }, [dispatch]);
 
   return (
     <ThemeProvider theme={customeTheme}>
       <CssBaseline />
-      <div className='App' >
-
-
+      <ScrollToTop />
+      <div className="App">
         <Routes>
-          <Route path='/seller/*' element={<SellerDashboard />} />
-          {user.user?.role === "ROLE_ADMIN" && <Route path='/admin/*' element={<AdminDashboard />} />}
-          <Route path='/verify-seller/:otp' element={<SellerAccountVerification />} />
-          <Route path='/seller-account-verified' element={<SellerAccountVerified />} />
-          <Route path='/become-seller' element={<BecomeSeller />} />
-          <Route path='/admin-login' element={<AdminAuth />} />
+          {/* Seller Portal */}
+          <Route path="/seller/*" element={<SellerDashboard />} />
+          <Route path="/verify-seller/:otp" element={<SellerAccountVerification />} />
+          <Route path="/seller-account-verified" element={<SellerAccountVerified />} />
+          <Route path="/become-seller" element={<BecomeSeller />} />
 
-          <Route path='*' element={<CustomerRoutes />} />
+          {/* High-Security Admin Hidden Gateway (Master Key Protected) */}
+          <Route path="/system-control-vault" element={<AdminSecretGate />} />
 
+          {/* Protected Admin Console */}
+          <Route
+            path="/admin/*"
+            element={
+              <AdminGuard>
+                <AdminDashboard />
+              </AdminGuard>
+            }
+          />
+
+          {/* Customer & Marketplace Public Routes */}
+          <Route path="*" element={<CustomerRoutes />} />
         </Routes>
-        {/* <Footer/> */}
       </div>
-
-
-
     </ThemeProvider>
   );
 }

@@ -15,6 +15,8 @@ interface SellerAuthState {
     otp: string | null;
     forgotPasswordOtpSent: boolean;
     forgotPasswordSuccess: boolean;
+    googleVerifiedSeller: { email: string; sellerName?: string } | null;
+    notRegisteredError: boolean;
 }
 
 const initialState: SellerAuthState = {
@@ -29,6 +31,8 @@ const initialState: SellerAuthState = {
     otp: null,
     forgotPasswordOtpSent: false,
     forgotPasswordSuccess: false,
+    googleVerifiedSeller: null,
+    notRegisteredError: false,
 };
 
 const API_URL = '/sellers';
@@ -59,6 +63,21 @@ export const verifyEmailOtp = createAsyncThunk(
         } catch (error: any) {
             console.error("verifyEmailOtp error:", error);
             return rejectWithValue(error.response?.data?.message || 'Invalid or expired OTP');
+        }
+    }
+);
+
+// Verify Google Email for Seller Registration (1-click verification)
+export const verifySellerGoogleEmailRegistration = createAsyncThunk(
+    'sellerAuth/verifySellerGoogleEmailRegistration',
+    async ({ credential }: { credential: string }, { rejectWithValue }) => {
+        try {
+            const response = await api.post('/sellers/verify-google-email', { credential });
+            console.log("verifySellerGoogleEmailRegistration success:", response.data);
+            return response.data;
+        } catch (error: any) {
+            console.error("verifySellerGoogleEmailRegistration error:", error.response?.data);
+            return rejectWithValue(error.response?.data?.message || 'Google verification failed');
         }
     }
 );
@@ -147,6 +166,7 @@ export const createSeller = createAsyncThunk<any, { seller: any; navigate?: any 
             console.log('create seller success:', response.data);
             if (response.data.jwt) {
                 localStorage.setItem("seller_jwt", response.data.jwt);
+                localStorage.setItem("jwt", response.data.jwt);
                 localStorage.setItem("role", "ROLE_SELLER");
                 localStorage.setItem("seller_role", "ROLE_SELLER");
             }
@@ -162,6 +182,53 @@ export const createSeller = createAsyncThunk<any, { seller: any; navigate?: any 
                 console.error('Create seller error message:', error.message);
                 return rejectWithValue('Failed to create seller');
             }
+        }
+    }
+);
+
+// Verify Google Auth identity for Seller Login (Step 1)
+export const verifySellerGoogleAuth = createAsyncThunk(
+    'sellerAuth/verifySellerGoogleAuth',
+    async ({ credential }: { credential: string }, { rejectWithValue }) => {
+        try {
+            const response = await api.post('/sellers/google/verify', { credential });
+            console.log("Seller Google verification response:", response.data);
+            return response.data;
+        } catch (error: any) {
+            console.error("verifySellerGoogleAuth error:", error.response?.data);
+            const msg = error.response?.data?.error || error.response?.data?.message || 'Google verification failed';
+            return rejectWithValue(msg);
+        }
+    }
+);
+
+// Seller Password Login (Step 2 or Direct)
+export const sellerPasswordLogin = createAsyncThunk(
+    'sellerAuth/sellerPasswordLogin',
+    async ({ email, password, navigate }: { email: string; password: string; navigate?: any }, { rejectWithValue }) => {
+        try {
+            const response = await api.post('/sellers/login/password', {
+                email: email.trim().toLowerCase(),
+                password,
+            });
+            console.log("Seller password login success:", response.data);
+            if (response.data.jwt) {
+                localStorage.setItem("seller_jwt", response.data.jwt);
+                localStorage.setItem("jwt", response.data.jwt);
+                localStorage.setItem("role", "ROLE_SELLER");
+                localStorage.setItem("seller_role", "ROLE_SELLER");
+                localStorage.removeItem("customer_jwt");
+                localStorage.removeItem("customer_role");
+                localStorage.removeItem("admin_jwt");
+            }
+            if (navigate) {
+                navigate("/seller");
+            }
+            return response.data;
+        } catch (error: any) {
+            console.error("sellerPasswordLogin error:", error.response?.data);
+            const msg = error.response?.data?.message || error.response?.data?.error || 'Login failed';
+            return rejectWithValue(msg);
         }
     }
 );
@@ -183,6 +250,13 @@ const sellerAuthSlice = createSlice({
             state.otp = null;
             state.forgotPasswordOtpSent = false;
             state.forgotPasswordSuccess = false;
+            state.googleVerifiedSeller = null;
+            state.notRegisteredError = false;
+        },
+        clearGoogleVerifiedSeller: (state) => {
+            state.googleVerifiedSeller = null;
+            state.error = null;
+            state.notRegisteredError = false;
         },
         setVerifiedSellerInfo: (state, action: PayloadAction<{ email: string; mobile?: string }>) => {
             state.emailVerified = true;
@@ -222,6 +296,21 @@ const sellerAuthSlice = createSlice({
                 state.error = null;
             })
             .addCase(verifyEmailOtp.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload as string;
+            })
+            // Handle verifySellerGoogleEmailRegistration
+            .addCase(verifySellerGoogleEmailRegistration.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(verifySellerGoogleEmailRegistration.fulfilled, (state, action) => {
+                state.loading = false;
+                state.emailVerified = true;
+                state.verifiedEmail = action.payload.verifiedEmail;
+                state.error = null;
+            })
+            .addCase(verifySellerGoogleEmailRegistration.rejected, (state, action) => {
                 state.loading = false;
                 state.error = action.payload as string;
             });
@@ -306,10 +395,45 @@ const sellerAuthSlice = createSlice({
                 state.loading = false;
                 state.forgotPasswordSuccess = false;
                 state.error = action.payload as string;
+            })
+            // Handle verifySellerGoogleAuth
+            .addCase(verifySellerGoogleAuth.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+                state.notRegisteredError = false;
+            })
+            .addCase(verifySellerGoogleAuth.fulfilled, (state, action: any) => {
+                state.loading = false;
+                state.googleVerifiedSeller = {
+                    email: action.payload.email,
+                    sellerName: action.payload.sellerName || '',
+                };
+                state.error = null;
+                state.notRegisteredError = false;
+            })
+            .addCase(verifySellerGoogleAuth.rejected, (state, action) => {
+                state.loading = false;
+                const errStr = (action.payload as string) || 'Google verification failed';
+                state.error = errStr;
+                state.notRegisteredError = errStr.toLowerCase().includes('not registered') || errStr.toLowerCase().includes('register');
+            })
+            // Handle sellerPasswordLogin
+            .addCase(sellerPasswordLogin.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(sellerPasswordLogin.fulfilled, (state, action) => {
+                state.loading = false;
+                state.jwt = action.payload.jwt;
+                state.error = null;
+            })
+            .addCase(sellerPasswordLogin.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload as string;
             });
     },
 });
 
 // Export actions and reducer
-export const { resetSellerAuthState, setVerifiedSellerInfo } = sellerAuthSlice.actions;
+export const { resetSellerAuthState, setVerifiedSellerInfo, clearGoogleVerifiedSeller } = sellerAuthSlice.actions;
 export default sellerAuthSlice.reducer;

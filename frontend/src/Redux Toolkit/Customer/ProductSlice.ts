@@ -48,7 +48,7 @@ export const searchProduct = createAsyncThunk<Product[], string>(
   async (query, { rejectWithValue }) => {
     try {
       const response = await api.get<Product[]>(`${API_URL}/search`, {
-        params: { query },
+        params: { query, q: query },
       });
       console.log("search products ",response.data)
       return response.data;

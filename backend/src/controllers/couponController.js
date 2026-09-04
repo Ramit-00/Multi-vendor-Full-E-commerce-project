@@ -6,7 +6,7 @@ class couponController {
     try {
       const { apply, code, orderValue } = req.body;
 
-      const user = await req.useeer
+      const user = req.user;
       let cart;
 
       if (apply === "true") {

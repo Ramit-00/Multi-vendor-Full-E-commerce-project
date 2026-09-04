@@ -35,6 +35,11 @@ const userSchema = new mongoose.Schema(
       enum: ["CUSTOMER", "ADMIN"],
       default: "CUSTOMER",
     },
+    status: {
+      type: String,
+      enum: ["ACTIVE", "BANNED", "SUSPENDED"],
+      default: "ACTIVE",
+    },
     addresses: [
       {
         type: mongoose.Schema.Types.ObjectId,

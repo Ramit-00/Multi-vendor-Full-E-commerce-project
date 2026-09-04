@@ -4,14 +4,6 @@ import { type User, type UserState, type Address } from "../../types/userTypes";
 import { api } from "../../Config/Api";
 import { type RootState } from "../Store";
 
-const getSavedAddresses = (): Address[] => {
-  try {
-    const saved = localStorage.getItem("user_addresses");
-    if (saved) return JSON.parse(saved);
-  } catch (e) {}
-  return [];
-};
-
 const initialState: UserState = {
   user: null,
   loading: false,
@@ -49,14 +41,15 @@ export const fetchUserProfile = createAsyncThunk<
 
 export const saveUserAddress = createAsyncThunk<
   Address,
-  { address: Address; jwt: string }
+  { address: Address; jwt?: string }
 >(
   "user/saveUserAddress",
   async ({ address, jwt }) => {
-    if (jwt) {
+    const token = jwt || localStorage.getItem("jwt") || localStorage.getItem("customer_jwt") || "";
+    if (token) {
       try {
         const response = await api.post(`${API_URL}/address`, address, {
-          headers: { Authorization: `Bearer ${jwt}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
         return response.data;
       } catch (err: any) {
@@ -73,20 +66,40 @@ export const saveUserAddress = createAsyncThunk<
 
 export const deleteUserAddress = createAsyncThunk<
   string,
-  { addressId: string; jwt: string }
+  { addressId: string; jwt?: string }
 >(
   "user/deleteUserAddress",
   async ({ addressId, jwt }) => {
-    if (jwt) {
+    const token = jwt || localStorage.getItem("jwt") || localStorage.getItem("customer_jwt") || "";
+    if (token) {
       try {
         await api.delete(`${API_URL}/address/${addressId}`, {
-          headers: { Authorization: `Bearer ${jwt}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
       } catch (err: any) {
         console.warn("Backend delete address notice, deleting locally:", err.message);
       }
     }
     return addressId;
+  }
+);
+
+export const updateUserProfile = createAsyncThunk<
+  User,
+  { fullName?: string; mobile?: string; jwt?: string }
+>(
+  "user/updateUserProfile",
+  async ({ fullName, mobile, jwt }) => {
+    const token = jwt || localStorage.getItem("jwt");
+    try {
+      const response = await api.patch(`${API_URL}/profile`, { fullName, mobile }, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return response.data;
+    } catch (err: any) {
+      console.warn("Update user profile API warning:", err.message);
+      return { fullName: fullName || "", mobile: mobile || "" } as any;
+    }
   }
 );
 
@@ -115,22 +128,12 @@ const userSlice = createSlice({
         }
         state.user.addresses.push(action.payload);
       }
-      try {
-        if (state.user) {
-          localStorage.setItem("user_addresses", JSON.stringify(state.user.addresses));
-        }
-      } catch (e) {}
     },
     removeLocalAddress: (state, action: PayloadAction<string>) => {
       if (state.user && Array.isArray(state.user.addresses)) {
         state.user.addresses = state.user.addresses.filter(
           (a) => String(a._id) !== String(action.payload)
         );
-        try {
-          if (state.user) {
-            localStorage.setItem("user_addresses", JSON.stringify(state.user.addresses));
-          }
-        } catch (e) {}
       }
     },
   },
@@ -143,19 +146,7 @@ const userSlice = createSlice({
       .addCase(
         fetchUserProfile.fulfilled,
         (state, action: PayloadAction<User>) => {
-          const userObj = { ...action.payload };
-          const localAddrs = getSavedAddresses();
-          if (localAddrs.length > 0) {
-            const existingIds = new Set((userObj.addresses || []).map((a: any) => String(a._id || a)));
-            const merged = [...(userObj.addresses || [])];
-            for (const la of localAddrs) {
-              if (!existingIds.has(String(la._id))) {
-                merged.push(la);
-              }
-            }
-            userObj.addresses = merged;
-          }
-          state.user = userObj;
+          state.user = action.payload;
           state.loading = false;
         }
       )
@@ -178,13 +169,13 @@ const userSlice = createSlice({
             if (!Array.isArray(state.user.addresses)) {
               state.user.addresses = [];
             }
-            state.user.addresses.push(action.payload);
-          }
-          try {
-            if (state.user) {
-              localStorage.setItem("user_addresses", JSON.stringify(state.user.addresses));
+            const exists = state.user.addresses.some(
+              (a) => String(a._id) === String(action.payload._id)
+            );
+            if (!exists) {
+              state.user.addresses.push(action.payload);
             }
-          } catch (e) {}
+          }
         }
       )
       .addCase(
@@ -194,14 +185,33 @@ const userSlice = createSlice({
             state.user.addresses = state.user.addresses.filter(
               (a) => String(a._id) !== String(action.payload)
             );
-            try {
-              if (state.user) {
-                localStorage.setItem("user_addresses", JSON.stringify(state.user.addresses));
-              }
-            } catch (e) {}
           }
         }
-      );
+      )
+      .addCase(updateUserProfile.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+        state.profileUpdated = false;
+      })
+      .addCase(
+        updateUserProfile.fulfilled,
+        (state, action: PayloadAction<any>) => {
+          if (state.user) {
+            state.user = {
+              ...state.user,
+              ...action.payload,
+            };
+          } else {
+            state.user = action.payload;
+          }
+          state.loading = false;
+          state.profileUpdated = true;
+        }
+      )
+      .addCase(updateUserProfile.rejected, (state, action) => {
+        state.loading = false;
+        state.error = (action.payload as string) || "Failed to update profile";
+      });
   },
 });
 

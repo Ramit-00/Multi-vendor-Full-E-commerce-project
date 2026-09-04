@@ -21,20 +21,38 @@ class HomeService {
         );
 
         // Check if there are existing deals
-        const existingDeals = await Deal.find().populate("category");
+        const mongoose = require('mongoose');
         let createdDeals = [];
 
-        if (existingDeals.length === 0) {
-            // Create new deals if none exist
-            const deals = dealCategories.map(category => 
-                new Deal({ discount: 10, category: category }) 
-            );
+        try {
+            if (mongoose.connection && mongoose.connection.readyState === 1) {
+                const existingDeals = await Deal.find().populate("category");
+                if (existingDeals.length === 0) {
+                    // Create new deals if none exist
+                    const deals = dealCategories.map(category => 
+                        new Deal({ discount: 10, category: category }) 
+                    );
 
-            createdDeals = await Deal.insertMany(deals);
-            createdDeals = await Deal.find({ _id: { $in: createdDeals.map(deal => deal._id) } })
-            .populate('category'); 
-        } else {
-            createdDeals = existingDeals;
+                    createdDeals = await Deal.insertMany(deals);
+                    createdDeals = await Deal.find({ _id: { $in: createdDeals.map(deal => deal._id) } })
+                    .populate('category'); 
+                } else {
+                    createdDeals = existingDeals;
+                }
+            } else {
+                createdDeals = dealCategories.map((category, idx) => ({
+                    _id: `fallback_deal_${idx}`,
+                    discount: [20, 30, 40, 50, 15, 25][idx % 6],
+                    category: category
+                }));
+            }
+        } catch (e) {
+            console.warn('[HomeService] MongoDB unavailable, using fallback deals');
+            createdDeals = dealCategories.map((category, idx) => ({
+                _id: `fallback_deal_${idx}`,
+                discount: [20, 30, 40, 50, 15, 25][idx % 6],
+                category: category
+            }));
         }
 
         const home = {

@@ -99,7 +99,7 @@ class SellerProductController {
   // Search for products by query
   async searchProduct(req, res) {
     try {
-      const query = req.query.q;
+      const query = req.query.query || req.query.q || req.query.keyword || req.query.search || "";
       const products = await ProductService.searchProduct(query);
       const host = req.get('host');
       const protocol = req.protocol;

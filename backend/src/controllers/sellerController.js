@@ -9,24 +9,45 @@ const generateOTP = require("../utils/generateOtp");
 const jwtProvider = require("../utils/jwtProvider");
 const { sendVerificationEmail } = require("../utils/sendEmail");
 const bcrypt = require("bcrypt");
+const mongoose = require("mongoose");
 
 // Set to remember verified emails in-memory for the registration session
 const verifiedEmails = new Set();
 
+function isDbConnected() {
+  return mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+}
+
+async function findSellerByEmail(email, selectPassword = false) {
+  const normalized = (email || '').toLowerCase().trim();
+  if (isDbConnected()) {
+    let q = Seller.findOne({ email: normalized });
+    if (selectPassword) q = q.select('+password');
+    return await q.exec();
+  } else {
+    const s = SellerService.fallbackSellers ? SellerService.fallbackSellers.get(normalized) : null;
+    return s || null;
+  }
+}
+
 class SellerController {
   async getSellerProfile(req, res) {
     try {
-      if (req.seller) {
+      if (req.seller && req.seller.sellerName) {
         return res.status(200).json(req.seller);
       }
 
       const authHeader = req.headers.authorization;
-      if (!authHeader) {
-        return res.status(401).json({ message: 'Authorization header missing' });
+      if (authHeader) {
+        const jwt = authHeader.split(' ')[1];
+        const seller = await SellerService.getSellerProfile(jwt);
+        return res.status(200).json(seller);
       }
-      const jwt = authHeader.split(' ')[1];
-      const seller = await SellerService.getSellerProfile(jwt);
-      return res.status(200).json(seller);
+
+      if (req.seller) {
+        return res.status(200).json(req.seller);
+      }
+      return res.status(401).json({ message: 'Authorization header missing' });
     } catch (err) {
       res
         .status(err instanceof SellerError ? 404 : 500)
@@ -81,6 +102,89 @@ class SellerController {
     }
   }
 
+  async googleVerifySeller(req, res) {
+    try {
+      const { credential } = req.body;
+      if (!credential) {
+        return res.status(400).json({ message: "Google credential token is required." });
+      }
+
+      const { verifyGoogleIdToken } = require("../utils/googleAuth");
+      const payload = await verifyGoogleIdToken(credential);
+      const email = (payload.email || "").toLowerCase().trim();
+
+      const seller = await findSellerByEmail(email);
+      if (!seller) {
+        return res.status(404).json({
+          success: false,
+          error: "No seller account found with this Google email. If you have not registered your store yet, please register your seller account first.",
+          email,
+        });
+      }
+
+      if (seller.accountStatus === AccountStatus.BANNED || seller.accountStatus === AccountStatus.CLOSED) {
+        return res.status(403).json({
+          message: `Your seller account is ${seller.accountStatus.toLowerCase()}. Access denied.`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        email: seller.email,
+        sellerName: seller.sellerName,
+        requiresPassword: true,
+      });
+    } catch (err) {
+      console.error("googleVerifySeller error:", err);
+      return res.status(400).json({ message: err.message || "Failed to verify Google account." });
+    }
+  }
+
+  async sellerPasswordLogin(req, res) {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ message: "Both email and store password are required." });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+      const seller = await findSellerByEmail(normalizedEmail, true);
+
+      if (!seller) {
+        return res.status(404).json({ message: "No seller account found with this email." });
+      }
+
+      if (seller.accountStatus === AccountStatus.BANNED || seller.accountStatus === AccountStatus.CLOSED) {
+        return res.status(403).json({
+          message: `Your seller account is ${seller.accountStatus.toLowerCase()}. Access denied.`,
+        });
+      }
+
+      if (seller.password) {
+        const isMatch = await bcrypt.compare(password, seller.password);
+        if (!isMatch) {
+          return res.status(400).json({ message: "Incorrect store password. Please verify your credentials or use Forgot Password." });
+        }
+      }
+
+      const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
+
+      const sellerData = typeof seller.toObject === 'function' ? seller.toObject() : { ...seller };
+      delete sellerData.password;
+
+      return res.status(200).json({
+        message: "Login Success",
+        jwt: token,
+        role: UserRoles.SELLER,
+        seller: sellerData,
+      });
+    } catch (err) {
+      console.error("sellerPasswordLogin error:", err);
+      return res.status(500).json({ message: err.message || "Internal Server Error" });
+    }
+  }
+
   async sendSellerLoginOtp(req, res) {
     try {
       const { email, password } = req.body;
@@ -90,7 +194,7 @@ class SellerController {
       }
 
       const normalizedEmail = email.toLowerCase().trim();
-      const seller = await Seller.findOne({ email: normalizedEmail }).select("+password");
+      const seller = await findSellerByEmail(normalizedEmail, true);
 
       if (!seller) {
         return res.status(404).json({ message: "No seller account found with this email." });
@@ -138,7 +242,7 @@ class SellerController {
       }
 
       const normalizedEmail = email.toLowerCase().trim();
-      const seller = await Seller.findOne({ email: normalizedEmail });
+      const seller = await findSellerByEmail(normalizedEmail);
       if (!seller) {
         return res.status(404).json({ message: "No seller account found with this email." });
       }
@@ -181,24 +285,33 @@ class SellerController {
       }
 
       const normalizedEmail = email.toLowerCase().trim();
-      const record = await VerificationCode.findOne({ email: normalizedEmail });
+      let record = null;
+      if (isDbConnected()) {
+        record = await VerificationCode.findOne({ email: normalizedEmail });
+      } else {
+        record = await VerificationService.getVerificationCode(normalizedEmail);
+      }
       const isValid = (record && record.otp === otp) || otp === "123456";
 
       if (!isValid) {
         return res.status(400).json({ message: "Invalid or expired OTP. Please check your email and try again." });
       }
 
-      const seller = await Seller.findOne({ email: normalizedEmail }).select("+password");
+      const seller = await findSellerByEmail(normalizedEmail, true);
       if (!seller) {
         return res.status(404).json({ message: "No seller account found with this email." });
       }
 
       const hashedPassword = await bcrypt.hash(newPassword, 10);
-      seller.password = hashedPassword;
-      await seller.save();
-
-      if (record) {
-        await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+      if (isDbConnected()) {
+        seller.password = hashedPassword;
+        await seller.save();
+        if (record) {
+          await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+        }
+      } else {
+        seller.password = hashedPassword;
+        await VerificationService.deleteVerificationCode(normalizedEmail);
       }
 
       return res.status(200).json({
@@ -218,7 +331,13 @@ class SellerController {
         return res.status(400).json({ message: "Both email and 6-digit OTP are required." });
       }
 
-      const record = await VerificationCode.findOne({ email });
+      const normalizedEmail = email.toLowerCase().trim();
+      let record = null;
+      if (isDbConnected()) {
+        record = await VerificationCode.findOne({ email: normalizedEmail });
+      } else {
+        record = await VerificationService.getVerificationCode(normalizedEmail);
+      }
 
       // Check OTP matching
       const isValid = (record && record.otp === otp) || otp === "123456";
@@ -228,20 +347,44 @@ class SellerController {
       }
 
       // Mark email as verified in session set
-      verifiedEmails.add(email.toLowerCase().trim());
+      verifiedEmails.add(normalizedEmail);
 
       // Clean up used OTP
-      if (record) {
+      if (isDbConnected() && record) {
         await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+      } else {
+        await VerificationService.deleteVerificationCode(normalizedEmail);
       }
 
       return res.status(200).json({
         success: true,
         message: "Email successfully verified! You can now complete your seller registration.",
-        verifiedEmail: email,
+        verifiedEmail: normalizedEmail,
       });
     } catch (err) {
       return res.status(500).json({ message: err.message });
+    }
+  }
+
+  async verifyGoogleEmail(req, res) {
+    try {
+      const { credential } = req.body;
+      if (!credential) {
+        return res.status(400).json({ message: "Google credential is required." });
+      }
+      const { verifyGoogleIdToken } = require("../utils/googleAuth");
+      const payload = await verifyGoogleIdToken(credential);
+      const email = (payload.email || "").toLowerCase().trim();
+
+      verifiedEmails.add(email);
+
+      return res.status(200).json({
+        success: true,
+        message: "Google email verified successfully!",
+        verifiedEmail: email,
+      });
+    } catch (err) {
+      return res.status(400).json({ message: err.message || "Failed to verify Google email." });
     }
   }
 
@@ -259,10 +402,19 @@ class SellerController {
       let isVerified = verifiedEmails.has(normalizedEmail);
 
       if (!isVerified && otp) {
-        const record = await VerificationCode.findOne({ email: normalizedEmail });
+        let record = null;
+        if (isDbConnected()) {
+          record = await VerificationCode.findOne({ email: normalizedEmail });
+        } else {
+          record = await VerificationService.getVerificationCode(normalizedEmail);
+        }
         if ((record && record.otp === otp) || otp === "123456") {
           isVerified = true;
-          if (record) await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+          if (isDbConnected() && record) {
+            await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+          } else {
+            await VerificationService.deleteVerificationCode(normalizedEmail);
+          }
         }
       }
 
@@ -299,11 +451,12 @@ class SellerController {
     try {
       const { otp, email, mobile } = req.body;
 
+      const normalizedEmail = email ? email.toLowerCase().trim() : null;
       let seller = null;
-      if (email) {
-        seller = await Seller.findOne({ email: email.toLowerCase().trim() });
+      if (normalizedEmail) {
+        seller = await findSellerByEmail(normalizedEmail);
       }
-      if (!seller && mobile) {
+      if (!seller && mobile && isDbConnected()) {
         seller = await Seller.findOne({ mobile });
       }
 
@@ -313,11 +466,21 @@ class SellerController {
 
       // Verify OTP
       if (otp) {
-        const vEmail = email ? await VerificationCode.findOne({ email: email.toLowerCase().trim() }) : null;
-        const vMobile = mobile ? await VerificationCode.findOne({ email: mobile }) : null;
+        let vEmail = null;
+        if (normalizedEmail) {
+          if (isDbConnected()) {
+            vEmail = await VerificationCode.findOne({ email: normalizedEmail });
+          } else {
+            vEmail = await VerificationService.getVerificationCode(normalizedEmail);
+          }
+        }
+        let vMobile = null;
+        if (mobile && isDbConnected()) {
+          vMobile = await VerificationCode.findOne({ email: mobile });
+        }
         const validOtp = (vEmail && vEmail.otp === otp) || (vMobile && vMobile.otp === otp) || otp === "123456";
 
-        if (!validOtp && vEmail) {
+        if (!validOtp && (vEmail || normalizedEmail)) {
           throw new Error("Wrong OTP entered. Please try again.");
         }
       }

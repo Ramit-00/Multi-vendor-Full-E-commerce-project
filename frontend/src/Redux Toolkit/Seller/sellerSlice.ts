@@ -34,9 +34,10 @@ export const fetchSellerProfile = createAsyncThunk<Seller, any>(
   "sellers/fetchSellerProfile",
   async (jwt: string, { rejectWithValue }) => {
     try {
+      const token = jwt || localStorage.getItem("seller_jwt") || localStorage.getItem("jwt");
       const response = await api.get<Seller>(`${API_URL}/profile`, {
         headers: {
-          Authorization: `Bearer ${jwt}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       console.log("fetch seller profile", response.data);
@@ -162,9 +163,10 @@ export const updateSeller = createAsyncThunk<
   ) => {
     console.log("seller update request ",seller)
     try {
+      const token = localStorage.getItem("seller_jwt") || localStorage.getItem("jwt");
       const response = await api.patch(`${API_URL}`, seller,{
         headers: {
-          Authorization: `Bearer ${localStorage.getItem("jwt")}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       console.log("seller updated successfully", response.data);

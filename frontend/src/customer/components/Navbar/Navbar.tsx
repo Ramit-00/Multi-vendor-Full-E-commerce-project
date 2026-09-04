@@ -5,11 +5,10 @@ import {
   Button,
   Drawer,
   IconButton,
-  InputBase,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import "./Navbar.css";
 import ShoppingBagOutlinedIcon from "@mui/icons-material/ShoppingBagOutlined";
 import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
@@ -20,22 +19,33 @@ import { useNavigate } from "react-router-dom";
 import AccountCircleOutlinedIcon from "@mui/icons-material/AccountCircleOutlined";
 import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
 import FavoriteBorderIcon from "@mui/icons-material/FavoriteBorder";
+import ClearIcon from "@mui/icons-material/Clear";
+import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
 import { useAppSelector } from "../../../Redux Toolkit/Store";
 
 const Navbar = () => {
   const theme = useTheme();
   const isLarge = useMediaQuery(theme.breakpoints.up("lg"));
+  const isMd = useMediaQuery(theme.breakpoints.up("md"));
   const { user, cart, sellers } = useAppSelector((store) => store);
   const navigate = useNavigate();
 
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleDrawer = (newOpen: boolean) => () => {
     setOpen(newOpen);
   };
 
+  const isAdmin = Boolean(
+    localStorage.getItem("admin_jwt") &&
+    localStorage.getItem("role") === "ROLE_ADMIN"
+  );
+
   const isSeller = Boolean(
+    !isAdmin &&
     localStorage.getItem("seller_jwt") &&
     localStorage.getItem("role") === "ROLE_SELLER" &&
     sellers?.profile?._id &&
@@ -50,31 +60,37 @@ const Navbar = () => {
     }
   };
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      navigate(`/search-products?query=${encodeURIComponent(searchQuery.trim())}`);
-    } else {
-      navigate("/search-products");
+  const executeSearch = (q: string) => {
+    const trimmed = q.trim();
+    if (trimmed) {
+      setMobileSearchOpen(false);
+      navigate(`/search-products?query=${encodeURIComponent(trimmed)}`);
     }
+  };
+
+  const handleDesktopSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeSearch(searchQuery);
+  };
+
+  const handleMobileSearchOpen = () => {
+    setMobileSearchOpen(true);
+    setTimeout(() => mobileInputRef.current?.focus(), 80);
   };
 
   return (
     <Box
       sx={{ zIndex: 100 }}
-      className="sticky top-0 left-0 right-0 bg-white/95 backdrop-blur-md border-b border-slate-200/80 transition-shadow duration-200"
+      className="sticky top-0 left-0 right-0 bg-white/95 backdrop-blur-md border-b border-slate-200/80"
     >
-      <div className="flex items-center justify-between px-4 lg:px-12 h-[68px]">
-        {/* Left: Menu & Brand Logo */}
-        <div className="flex items-center gap-4 lg:gap-8">
+      <div className="flex items-center gap-3 px-4 lg:px-12 h-[68px]">
+
+        {/* ── Left: Hamburger + Brand ── */}
+        <div className="flex items-center gap-3 shrink-0">
           <IconButton
             onClick={toggleDrawer(true)}
             aria-label="Open categories"
-            sx={{
-              color: "#334155",
-              p: "8px",
-              "&:hover": { backgroundColor: "#F1F5F9" },
-            }}
+            sx={{ color: "#334155", p: "8px", "&:hover": { backgroundColor: "#F1F5F9" } }}
           >
             <MenuIcon sx={{ fontSize: 24 }} />
           </IconButton>
@@ -87,7 +103,7 @@ const Navbar = () => {
               <span className="text-2xl font-black tracking-tight text-slate-900 group-hover:text-blue-900 transition-colors">
                 E-COM
               </span>
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-700 ml-0.5"></span>
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-700 ml-0.5" />
             </div>
             <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200/60">
               Marketplace
@@ -95,52 +111,82 @@ const Navbar = () => {
           </div>
         </div>
 
-        {/* Center: Search Bar (Desktop) */}
-        <div className="hidden md:flex flex-1 max-w-lg mx-6">
+        {/* ── Center: Search Bar (Desktop md+) ── */}
+        {isMd && (
           <form
-            onSubmit={handleSearchSubmit}
-            className="flex items-center w-full bg-slate-50 hover:bg-slate-100/80 focus-within:bg-white focus-within:ring-2 focus-within:ring-slate-900/10 focus-within:border-slate-400 border border-slate-200/90 rounded-full px-3.5 py-1.5 transition-all duration-200"
+            onSubmit={handleDesktopSubmit}
+            className="flex flex-1 items-center bg-slate-50 border border-slate-200 hover:border-slate-400 focus-within:border-slate-700 focus-within:bg-white focus-within:shadow-sm rounded-xl transition-all duration-150 overflow-hidden mx-4"
           >
-            <SearchIcon sx={{ color: "#94A3B8", fontSize: 20, mr: 1 }} />
-            <InputBase
-              placeholder="Search products, brands, collections..."
+            {/* Search icon — acts as submit */}
+            <button
+              type="submit"
+              className="flex items-center justify-center px-3.5 h-full text-slate-400 hover:text-slate-700 transition-colors shrink-0"
+              aria-label="Search"
+            >
+              <SearchIcon sx={{ fontSize: 20 }} />
+            </button>
+
+            <input
+              type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              fullWidth
-              sx={{
-                fontSize: "13px",
-                color: "#0F172A",
-                "& input": {
-                  padding: "2px 0",
-                  "&::placeholder": {
-                    color: "#94A3B8",
-                    opacity: 1,
-                  },
-                },
-              }}
+              placeholder="Search products, brands, categories…"
+              className="w-full py-2.5 bg-transparent border-none outline-none text-sm text-slate-900 placeholder:text-slate-400 font-medium"
             />
+
+            {/* Clear button */}
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="flex items-center justify-center px-3 h-full text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+                aria-label="Clear"
+              >
+                <ClearIcon sx={{ fontSize: 16 }} />
+              </button>
+            )}
           </form>
-        </div>
+        )}
 
-        {/* Right: Actions (Profile, Wishlist, Cart, Seller Portal) */}
-        <div className="flex items-center gap-1.5 lg:gap-3">
-          {/* Mobile Search Icon */}
-          <IconButton
-            onClick={() => navigate("/search-products")}
-            className="md:hidden"
-            sx={{
-              color: "#475569",
-              "&:hover": { backgroundColor: "#F1F5F9" },
-            }}
-          >
-            <SearchIcon sx={{ fontSize: 22 }} />
-          </IconButton>
+        {/* ── Right: Action Icons ── */}
+        <div className="flex items-center gap-1 lg:gap-2 ml-auto shrink-0">
 
-          {/* User / Seller Identity */}
-          {isSeller && sellers?.profile ? (
+          {/* Mobile: search icon — opens inline bar below */}
+          {!isMd && (
+            <IconButton
+              onClick={handleMobileSearchOpen}
+              aria-label="Search"
+              sx={{ color: "#475569", "&:hover": { backgroundColor: "#F1F5F9" } }}
+            >
+              <SearchIcon sx={{ fontSize: 22 }} />
+            </IconButton>
+          )}
+
+          {/* User / Admin / Seller identity chip */}
+          {isAdmin ? (
+            <Button
+              onClick={() => navigate("/admin")}
+              sx={{
+                textTransform: "none",
+                p: "5px 14px",
+                borderRadius: "9999px",
+                backgroundColor: "#0F172A",
+                color: "#FFFFFF",
+                border: "1px solid #1E293B",
+                "&:hover": { backgroundColor: "#1E293B", borderColor: "#334155" },
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <ShieldOutlinedIcon sx={{ fontSize: 16, color: "#60A5FA" }} />
+              <span className="font-bold text-xs text-white">
+                Admin Console
+              </span>
+            </Button>
+          ) : isSeller && sellers?.profile ? (
             <Button
               onClick={() => navigate("/seller/account")}
-              className="flex items-center gap-2"
               sx={{
                 textTransform: "none",
                 p: "4px 10px",
@@ -150,31 +196,19 @@ const Navbar = () => {
                 "&:hover": { backgroundColor: "#F1F5F9", borderColor: "#CBD5E1" },
               }}
             >
-              <Avatar
-                sx={{
-                  width: 28,
-                  height: 28,
-                  bgcolor: "#1E40AF",
-                  color: "#FFFFFF",
-                  fontWeight: 700,
-                  fontSize: 12,
-                }}
-              >
+              <Avatar sx={{ width: 28, height: 28, bgcolor: "#1E40AF", color: "#fff", fontWeight: 700, fontSize: 12 }}>
                 {(sellers.profile.sellerName || sellers.profile.businessDetails?.businessName || "S")[0].toUpperCase()}
               </Avatar>
-              <div className="hidden lg:block text-left pr-1">
+              <div className="hidden lg:block text-left pl-2 pr-1">
                 <p className="font-bold text-xs text-slate-800 leading-tight">
                   {(sellers.profile.sellerName || sellers.profile.businessDetails?.businessName || "Seller").split(" ")[0]}
                 </p>
-                <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider">
-                  Partner
-                </span>
+                <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider">Partner</span>
               </div>
             </Button>
           ) : user.user ? (
             <Button
               onClick={() => navigate("/account/orders")}
-              className="flex items-center gap-2"
               sx={{
                 textTransform: "none",
                 p: "4px 10px",
@@ -184,19 +218,10 @@ const Navbar = () => {
                 "&:hover": { backgroundColor: "#F1F5F9", borderColor: "#CBD5E1" },
               }}
             >
-              <Avatar
-                sx={{
-                  width: 28,
-                  height: 28,
-                  bgcolor: "#0F172A",
-                  color: "#FFFFFF",
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
+              <Avatar sx={{ width: 28, height: 28, bgcolor: "#0F172A", color: "#fff", fontSize: 12, fontWeight: 700 }}>
                 {user.user?.fullName?.[0]?.toUpperCase() || "U"}
               </Avatar>
-              <span className="font-semibold hidden lg:block text-slate-800 text-xs pr-1">
+              <span className="font-semibold hidden lg:block text-slate-800 text-xs pl-2 pr-1">
                 {user.user?.fullName?.split(" ")[0]}
               </span>
             </Button>
@@ -214,43 +239,33 @@ const Navbar = () => {
                 borderRadius: "9999px",
                 px: 2,
                 py: "5px",
-                "&:hover": {
-                  borderColor: "#0F172A",
-                  backgroundColor: "#F8FAFC",
-                },
+                textTransform: "none",
+                "&:hover": { borderColor: "#0F172A", backgroundColor: "#F8FAFC" },
               }}
             >
               Sign In
             </Button>
           )}
 
-          {/* Wishlist Icon */}
+          {/* Wishlist */}
           <IconButton
             onClick={() => navigate("/wishlist")}
-            sx={{
-              color: "#475569",
-              p: "8px",
-              "&:hover": { backgroundColor: "#F1F5F9", color: "#E11D48" },
-            }}
+            sx={{ color: "#475569", p: "8px", "&:hover": { backgroundColor: "#F1F5F9", color: "#E11D48" } }}
           >
             <FavoriteBorderIcon sx={{ fontSize: 22 }} />
           </IconButton>
 
-          {/* Cart Icon */}
+          {/* Cart */}
           <IconButton
             onClick={() => navigate("/cart")}
-            sx={{
-              color: "#475569",
-              p: "8px",
-              "&:hover": { backgroundColor: "#F1F5F9", color: "#0F172A" },
-            }}
+            sx={{ color: "#475569", p: "8px", "&:hover": { backgroundColor: "#F1F5F9", color: "#0F172A" } }}
           >
             <Badge
               badgeContent={cart.cart?.cartItems?.length || 0}
               sx={{
                 "& .MuiBadge-badge": {
                   backgroundColor: "#0F172A",
-                  color: "#FFFFFF",
+                  color: "#fff",
                   fontWeight: 700,
                   fontSize: "10px",
                   minWidth: "16px",
@@ -263,18 +278,22 @@ const Navbar = () => {
             </Badge>
           </IconButton>
 
-          {/* Seller Action Button (Desktop) */}
-          {isLarge && (
+          {/* Seller Hub / Become a Seller (lg only, hidden for Admin) */}
+          {isLarge && !isAdmin && (
             <Button
               onClick={becomeSellerClick}
-              startIcon={isSeller ? <DashboardOutlinedIcon sx={{ fontSize: 16 }} /> : <StorefrontOutlinedIcon sx={{ fontSize: 16 }} />}
+              startIcon={
+                isSeller
+                  ? <DashboardOutlinedIcon sx={{ fontSize: 16 }} />
+                  : <StorefrontOutlinedIcon sx={{ fontSize: 16 }} />
+              }
               variant={isSeller ? "contained" : "outlined"}
               size="small"
               sx={
                 isSeller
                   ? {
                       backgroundColor: "#0F172A",
-                      color: "#FFFFFF",
+                      color: "#fff",
                       "&:hover": { backgroundColor: "#1E293B" },
                       textTransform: "none",
                       fontWeight: 700,
@@ -292,10 +311,7 @@ const Navbar = () => {
                       borderRadius: "8px",
                       px: 2,
                       py: "6px",
-                      "&:hover": {
-                        borderColor: "#0F172A",
-                        backgroundColor: "#F8FAFC",
-                      },
+                      "&:hover": { borderColor: "#0F172A", backgroundColor: "#F8FAFC" },
                     }
               }
             >
@@ -304,6 +320,50 @@ const Navbar = () => {
           )}
         </div>
       </div>
+
+      {/* ── Mobile: full-width search bar (slides in below header) ── */}
+      {!isMd && mobileSearchOpen && (
+        <div className="border-t border-slate-200/80 bg-white px-4 py-3">
+          <form
+            onSubmit={(e) => { e.preventDefault(); executeSearch(searchQuery); }}
+            className="flex items-center gap-2 bg-slate-50 border border-slate-300 focus-within:border-slate-700 focus-within:bg-white rounded-xl overflow-hidden transition-all"
+          >
+            <button
+              type="submit"
+              className="flex items-center justify-center pl-3.5 text-slate-400 hover:text-slate-700 transition-colors"
+              aria-label="Search"
+            >
+              <SearchIcon sx={{ fontSize: 20 }} />
+            </button>
+            <input
+              ref={mobileInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search products, brands…"
+              className="flex-1 py-2.5 bg-transparent border-none outline-none text-sm text-slate-900 placeholder:text-slate-400 font-medium"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="flex items-center justify-center text-slate-400 hover:text-slate-600"
+                aria-label="Clear"
+              >
+                <ClearIcon sx={{ fontSize: 16 }} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => { setMobileSearchOpen(false); setSearchQuery(""); }}
+              className="flex items-center justify-center pr-3 text-slate-400 hover:text-slate-700"
+              aria-label="Close"
+            >
+              <ClearIcon sx={{ fontSize: 20 }} />
+            </button>
+          </form>
+        </div>
+      )}
 
       <Drawer open={open} onClose={toggleDrawer(false)}>
         <DrawerList toggleDrawer={toggleDrawer} />

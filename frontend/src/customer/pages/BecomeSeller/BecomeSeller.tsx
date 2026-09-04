@@ -48,7 +48,7 @@ const BecomeSeller = () => {
       <section className="col-span-12 lg:col-span-5 md:col-span-6 p-6 sm:p-10 shadow-sm bg-white border-r border-slate-200/80 flex flex-col justify-between">
         <div>
           {isLoginPage ? (
-            <SellerLoginForm />
+            <SellerLoginForm onSwitchToRegister={() => setIsLoginPage(false)} />
           ) : !isVerified ? (
             <SellerVerificationGate onVerified={handleVerificationSuccess} />
           ) : (

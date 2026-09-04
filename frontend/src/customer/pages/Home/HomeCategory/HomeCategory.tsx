@@ -7,8 +7,9 @@ const HomeCategory = () => {
   const { homePage} = useAppSelector((store) => store);
   return (
     <div className='flex justify-center gap-7 flex-wrap '>
-        {homePage.homePageData?.shopByCategories.map((item)=><HomeCategoryCard item={item}/>)}
-        
+        {homePage.homePageData?.shopByCategories?.map((item, index) => (
+          <HomeCategoryCard key={index} item={item} />
+        ))}
     </div>
   )
 }

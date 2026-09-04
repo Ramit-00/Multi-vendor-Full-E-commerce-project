@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import OTPInput from '../../components/OtpFild/OTPInput';
 import { useAppDispatch, useAppSelector } from '../../../Redux Toolkit/Store';
 import { useNavigate } from 'react-router-dom';
-import { sendLoginSignupOtp, signup } from '../../../Redux Toolkit/Customer/AuthSlice';
+import { sendLoginSignupOtp, signup, googleAuthLogin } from '../../../Redux Toolkit/Customer/AuthSlice';
+import { GoogleLogin } from '@react-oauth/google';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
 
@@ -103,6 +104,35 @@ const SignupForm = () => {
                     <span>{auth.error.includes("user not founed") ? "Incorrect credentials" : auth.error}</span>
                 </div>
             )}
+
+            {/* Google One-Click Sign Up / Sign In */}
+            <div className="flex justify-center w-full">
+                <GoogleLogin
+                    onSuccess={(credentialResponse) => {
+                        if (credentialResponse.credential) {
+                            dispatch(googleAuthLogin({ credential: credentialResponse.credential, navigate }));
+                        }
+                    }}
+                    onError={() => {
+                        console.error("Google Sign-In Failed");
+                    }}
+                    useOneTap={false}
+                    theme="outline"
+                    size="large"
+                    width="100%"
+                    text="signup_with"
+                    shape="rectangular"
+                />
+            </div>
+
+            <div className="relative my-2">
+                <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-slate-200"></div>
+                </div>
+                <div className="relative flex justify-center text-[11px] uppercase">
+                    <span className="bg-white px-3 text-slate-400 font-semibold tracking-wider">Or continue with email</span>
+                </div>
+            </div>
 
             <form onSubmit={formik.handleSubmit} className="space-y-4">
                 <TextField
