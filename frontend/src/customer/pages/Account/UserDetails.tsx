@@ -343,7 +343,7 @@ const UserDetails = () => {
             <div className="space-y-1.5">
               <div className="flex items-center justify-center sm:justify-start gap-2">
                 <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-                  {currentUser?.fullName || "Valued Customer"}
+                  {currentUser?.fullName || (currentUser?.email ? currentUser.email.split('@')[0] : "Customer")}
                 </h2>
                 <VerifiedUserIcon sx={{ color: "#60A5FA", fontSize: 22 }} />
               </div>

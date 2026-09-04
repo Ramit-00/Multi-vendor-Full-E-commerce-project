@@ -90,7 +90,7 @@ export const updateUserProfile = createAsyncThunk<
 >(
   "user/updateUserProfile",
   async ({ fullName, mobile, jwt }) => {
-    const token = jwt || localStorage.getItem("jwt");
+    const token = jwt || localStorage.getItem("customer_jwt") || localStorage.getItem("jwt");
     try {
       const response = await api.patch(`${API_URL}/profile`, { fullName, mobile }, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},

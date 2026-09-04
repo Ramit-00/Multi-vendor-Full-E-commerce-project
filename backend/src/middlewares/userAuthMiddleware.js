@@ -24,11 +24,12 @@ const authMiddleware = async (req, res, next) => {
       try {
         const payload = jwtProvider.verifyJwt(token);
         const email = (payload.email || '').toLowerCase().trim();
-        const AuthService = require('../services/AuthService');
+        const namePart = email.split('@')[0];
+        const cleanName = namePart ? (namePart.charAt(0).toUpperCase() + namePart.slice(1)) : 'Customer';
         const fallbackUser = (AuthService.fallbackUsers && AuthService.fallbackUsers.get(email)) || {
           email,
           _id: `offline_${email}`,
-          fullName: 'Valued Customer',
+          fullName: cleanName,
           role: payload.role || 'ROLE_CUSTOMER',
           addresses: [],
         };
