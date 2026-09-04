@@ -25,6 +25,7 @@ import revenueChartSlice from "./Seller/revenueChartSlice";
 import CustomerSlice from "./Customer/Customer/CustomerSlice";
 import DealSlice from "./Admin/DealSlice";
 import AdminSlice from "./Admin/AdminSlice";
+import adminPlatformSlice from "./Admin/AdminPlatformSlice";
 
 const rootReducer = combineReducers({
   
@@ -53,7 +54,8 @@ const rootReducer = combineReducers({
   adminCoupon:AdminCouponSlice,
   adminDeals:DealSlice,
   admin:AdminSlice,
-  deal:DealSlice
+  deal:DealSlice,
+  adminPlatform: adminPlatformSlice,
 });
 
 const store = configureStore({

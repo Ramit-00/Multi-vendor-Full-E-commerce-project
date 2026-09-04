@@ -10,9 +10,9 @@ const ElectronicCategory = () => {
   if (categories.length === 0) return null;
 
   return (
-    <div className="px-4 lg:px-12 py-4">
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-3 sm:p-4 overflow-x-auto">
-        <div className="flex items-center justify-between min-w-max gap-4 sm:gap-6">
+    <div className="px-4 lg:px-12 pt-4 pb-2">
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm px-4 py-3 sm:px-8 sm:py-4">
+        <div className="flex items-center justify-around flex-wrap gap-3 sm:gap-6">
           {categories
             .slice(0, isSmallScreen ? 5 : categories.length)
             .map((item, index) => (

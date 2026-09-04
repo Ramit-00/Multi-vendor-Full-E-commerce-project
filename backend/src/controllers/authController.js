@@ -64,6 +64,22 @@ class AuthController {
             return res.status(500).json({ error: "Internal Server Error" });
         }
     }
+
+    async googleAuth(req, res) {
+        try {
+            const { credential } = req.body;
+            if (!credential) {
+                return res.status(400).json({ error: "Google credential token is required" });
+            }
+            const authResponse = await AuthService.googleAuth(credential);
+            return res.status(200).json(authResponse);
+        } catch (error) {
+            if (error instanceof Error || error instanceof UserError) {
+                return res.status(400).json({ error: error.message });
+            }
+            return res.status(500).json({ error: "Internal Server Error" });
+        }
+    }
 }
 
 module.exports = new AuthController();

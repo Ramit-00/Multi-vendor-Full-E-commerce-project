@@ -10,7 +10,7 @@ import {
 } from '../../types/authTypes';
 import { api } from '../../Config/Api';
 import { type RootState } from '../Store';
-import { resetUserState } from './UserSlice';
+import { resetUserState, fetchUserProfile } from './UserSlice';
 import { resetCartState } from './CartSlice';
 import { resetSellerProfile, fetchSellerProfile } from '../Seller/sellerSlice';
 import axios from 'axios';
@@ -99,6 +99,36 @@ export const signin = createAsyncThunk<AuthResponse, LoginRequest>(
     }
 );
 
+export const googleAuthLogin = createAsyncThunk<
+    AuthResponse,
+    { credential: string; navigate: any }
+>(
+    'auth/googleAuthLogin',
+    async ({ credential, navigate }, { rejectWithValue, dispatch }) => {
+        try {
+            const response = await api.post<any>(`${API_URL}/google`, { credential });
+            console.log("Google Auth successful", response.data);
+
+            const token = response.data.jwt;
+            localStorage.setItem("customer_jwt", token);
+            localStorage.setItem("jwt", token);
+            localStorage.setItem("role", "ROLE_CUSTOMER");
+            localStorage.setItem("customer_role", "ROLE_CUSTOMER");
+            localStorage.removeItem("seller_jwt");
+            localStorage.removeItem("seller_role");
+            localStorage.removeItem("admin_jwt");
+            dispatch(resetSellerProfile());
+            dispatch(fetchUserProfile({ jwt: token, navigate }));
+            navigate("/");
+            return response.data;
+        } catch (error: any) {
+            console.log("Google Auth error", error.response?.data);
+            const msg = error.response?.data?.error || error.response?.data?.message || 'Google Sign-In failed';
+            return rejectWithValue(msg);
+        }
+    }
+);
+
 export const resetPassword = createAsyncThunk<ApiResponse, ResetPasswordRequest>(
     'auth/resetPassword',
     async (resetPasswordRequest, { rejectWithValue }) => {
@@ -183,6 +213,19 @@ const authSlice = createSlice({
                 state.loading = false;
             })
             .addCase(signin.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload as string;
+            })
+            .addCase(googleAuthLogin.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(googleAuthLogin.fulfilled, (state, action: PayloadAction<AuthResponse>) => {
+                state.jwt = action.payload.jwt;
+                state.role = action.payload.role;
+                state.loading = false;
+            })
+            .addCase(googleAuthLogin.rejected, (state, action) => {
                 state.loading = false;
                 state.error = action.payload as string;
             })

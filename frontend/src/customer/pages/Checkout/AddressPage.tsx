@@ -51,18 +51,10 @@ const AddressPage = () => {
   const [paymentGateway, setPaymentGateway] = useState(paymentGatewayList[0].value);
   const [open, setOpen] = useState(false);
 
-  const [localAddresses, setLocalAddresses] = useState<Address[]>(() => {
-    try {
-      const saved = localStorage.getItem('user_addresses');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return [];
-  });
+  const [localAddresses, setLocalAddresses] = useState<Address[]>(user.user?.addresses || []);
 
   useEffect(() => {
-    if (user.user?.addresses && user.user.addresses.length > 0) {
-      setLocalAddresses(user.user.addresses);
-    }
+    setLocalAddresses(user.user?.addresses || []);
   }, [user.user?.addresses]);
 
   const handleOpen = () => setOpen(true);
@@ -94,9 +86,6 @@ const AddressPage = () => {
       const updated = prev.filter((a, i) =>
         addressId ? String(a._id) !== String(addressId) : i !== index
       );
-      try {
-        localStorage.setItem('user_addresses', JSON.stringify(updated));
-      } catch (e) {}
 
       if (selectedValue >= updated.length) {
         setSelectedValue(Math.max(0, updated.length - 1));

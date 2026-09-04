@@ -10,7 +10,9 @@ import {
   sendSellerOtp,
   verifyEmailOtp,
   setVerifiedSellerInfo,
+  verifySellerGoogleEmailRegistration,
 } from '../../../Redux Toolkit/Seller/sellerAuthenticationSlice';
+import { GoogleLogin } from '@react-oauth/google';
 
 interface SellerVerificationGateProps {
   onVerified: (email: string, mobile: string) => void;
@@ -63,6 +65,21 @@ const SellerVerificationGate: React.FC<SellerVerificationGateProps> = ({ onVerif
     }
   };
 
+  const handleGoogleVerify = async (credentialResponse: any) => {
+    if (!credentialResponse.credential) return;
+    setLocalError(null);
+    const res = await dispatch(
+      verifySellerGoogleEmailRegistration({ credential: credentialResponse.credential })
+    );
+    if (verifySellerGoogleEmailRegistration.fulfilled.match(res)) {
+      const verifiedEmail = res.payload.verifiedEmail;
+      dispatch(setVerifiedSellerInfo({ email: verifiedEmail, mobile }));
+      onVerified(verifiedEmail, mobile);
+    } else {
+      setLocalError((res.payload as string) || 'Google verification failed.');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
@@ -89,6 +106,35 @@ const SellerVerificationGate: React.FC<SellerVerificationGateProps> = ({ onVerif
 
       {step === 'input' ? (
         <div className="space-y-4 pt-2">
+          {/* Quick Google Verification */}
+          <div className="space-y-2">
+            <div className="flex justify-center w-full">
+              <GoogleLogin
+                onSuccess={handleGoogleVerify}
+                onError={() => setLocalError('Google Sign-In failed. Please try email verification below.')}
+                useOneTap={false}
+                theme="outline"
+                size="large"
+                width="100%"
+                text="continue_with"
+                shape="rectangular"
+              />
+            </div>
+            <p className="text-center text-[11px] text-slate-400 font-medium">
+              Fast 1-click email verification with Google
+            </p>
+          </div>
+
+          <div className="relative my-2">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-200"></div>
+            </div>
+            <div className="relative flex justify-center text-[11px] uppercase">
+              <span className="bg-white px-3 text-slate-400 font-semibold tracking-wider">
+                Or verify with email OTP
+              </span>
+            </div>
+          </div>
           <TextField
             fullWidth
             required

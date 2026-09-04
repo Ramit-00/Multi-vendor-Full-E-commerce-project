@@ -38,7 +38,14 @@ const sellerAuthMiddleware = async (req, res, next) => {
     const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
 
     if (!dbConnected && process.env.ALLOW_OFFLINE === 'true') {
-      req.seller = { email, _id: `offline_${email}`, role: 'ROLE_SELLER' };
+      const SellerService = require('../services/SellerService');
+      const normalized = email.toLowerCase().trim();
+      const fallbackSeller = (SellerService.fallbackSellers && SellerService.fallbackSellers.get(normalized)) || {
+        email: normalized,
+        _id: `offline_${normalized}`,
+        role: 'ROLE_SELLER',
+      };
+      req.seller = fallbackSeller;
       return next();
     }
 
@@ -48,6 +55,12 @@ const sellerAuthMiddleware = async (req, res, next) => {
       return res
         .status(404)
         .json({ message: "Seller not found with email " + email });
+    }
+
+    if (seller.accountStatus === 'BANNED' || seller.accountStatus === 'CLOSED' || seller.accountStatus === 'SUSPENDED') {
+      return res.status(403).json({
+        message: `Access denied: Your seller account is ${seller.accountStatus.toLowerCase()}. Contact platform support.`
+      });
     }
 
     req.seller = seller;

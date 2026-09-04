@@ -411,16 +411,144 @@ class ProductService {
   }
 
   async searchProduct(query) {
-    if (!this._dbConnected()) {
-      const samples = this._getSampleProducts();
-      const q = (query || '').toLowerCase();
-      return samples.filter(p => p.title.toLowerCase().includes(q));
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      return [];
     }
-    const dbResults = await Product.find({ title: new RegExp(query, "i") });
-    if (dbResults.length > 0) return dbResults;
-    const samples = this._getSampleProducts();
-    const q = (query || '').toLowerCase();
-    return samples.filter(p => p.title.toLowerCase().includes(q));
+
+    const rawQuery = query.trim();
+    const cleanQuery = rawQuery.toLowerCase();
+    const queryTokens = cleanQuery
+      .split(/[\s,_\-+]+/)
+      .filter(t => t.length > 0 && !['a', 'an', 'the', 'in', 'on', 'of', 'for', 'with', 'and'].includes(t));
+
+    // Helper matcher for in-memory / sample products
+    const matchSampleProduct = (p) => {
+      const title = (p.title || '').toLowerCase();
+      const description = (p.description || '').toLowerCase();
+      const color = (p.color || '').toLowerCase();
+      const folder = (p.folder || '').toLowerCase();
+      const categories = Array.isArray(p.categories) ? p.categories.map(c => String(c).toLowerCase()) : [];
+      const sellerBusiness = (p.seller?.businessDetails?.businessName || '').toLowerCase();
+      const sellerName = (p.seller?.sellerName || '').toLowerCase();
+
+      // Combined searchable text corpus
+      const combined = `${title} ${description} ${color} ${folder} ${categories.join(' ')} ${sellerBusiness} ${sellerName}`;
+
+      // 1. Direct full query phrase match
+      if (combined.includes(cleanQuery)) {
+        return true;
+      }
+
+      // 2. Token / word matching
+      if (queryTokens.length > 0) {
+        const allTokensMatch = queryTokens.every(token => {
+          if (combined.includes(token)) return true;
+          // Handle plural / singular stems
+          if (token.endsWith('es') && combined.includes(token.slice(0, -2))) return true;
+          if (token.endsWith('s') && combined.includes(token.slice(0, -1))) return true;
+          if (combined.includes(token + 's') || combined.includes(token + 'es')) return true;
+          return false;
+        });
+
+        if (allTokensMatch) return true;
+
+        if (queryTokens.length >= 2) {
+          const matchedCount = queryTokens.filter(token => {
+            if (combined.includes(token)) return true;
+            if (token.endsWith('es') && combined.includes(token.slice(0, -2))) return true;
+            if (token.endsWith('s') && combined.includes(token.slice(0, -1))) return true;
+            return false;
+          }).length;
+          if (matchedCount / queryTokens.length >= 0.6) return true;
+        }
+      }
+
+      return false;
+    };
+
+    let sampleMatches = [];
+    try {
+      const samples = this._getAllCategoryProducts();
+      sampleMatches = samples.filter(matchSampleProduct);
+    } catch (sampleErr) {
+      console.warn("Error filtering sample products:", sampleErr.message);
+    }
+
+    let dbMatches = [];
+    if (this._dbConnected()) {
+      try {
+        const Seller = require("../models/Seller");
+        const Category = require("../models/Category");
+
+        const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tokenRegexes = queryTokens.map(t => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+
+        // Find matching categories
+        const matchingCategories = await Category.find({
+          $or: [
+            { name: new RegExp(escaped, 'i') },
+            { categoryId: new RegExp(escaped, 'i') },
+            ...tokenRegexes.map(r => ({ name: r })),
+            ...tokenRegexes.map(r => ({ categoryId: r }))
+          ]
+        }).select('_id');
+        const categoryIds = matchingCategories.map(c => c._id);
+
+        // Find matching sellers
+        const matchingSellers = await Seller.find({
+          $or: [
+            { sellerName: new RegExp(escaped, 'i') },
+            { "businessDetails.businessName": new RegExp(escaped, 'i') },
+            ...tokenRegexes.map(r => ({ sellerName: r })),
+            ...tokenRegexes.map(r => ({ "businessDetails.businessName": r }))
+          ]
+        }).select('_id');
+        const sellerIds = matchingSellers.map(s => s._id);
+
+        const orConditions = [
+          { title: new RegExp(escaped, 'i') },
+          { description: new RegExp(escaped, 'i') },
+          { color: new RegExp(escaped, 'i') }
+        ];
+
+        if (categoryIds.length > 0) {
+          orConditions.push({ category: { $in: categoryIds } });
+        }
+        if (sellerIds.length > 0) {
+          orConditions.push({ seller: { $in: sellerIds } });
+        }
+
+        tokenRegexes.forEach(r => {
+          orConditions.push({ title: r });
+          orConditions.push({ description: r });
+        });
+
+        dbMatches = await Product.find({ $or: orConditions })
+          .populate("seller")
+          .populate("category");
+      } catch (dbErr) {
+        console.warn("Error querying MongoDB for search:", dbErr.message);
+      }
+    }
+
+    // Merge and deduplicate
+    const seenIds = new Set();
+    const seenTitles = new Set();
+    const combinedResults = [];
+
+    [...dbMatches, ...sampleMatches].forEach(item => {
+      const id = String(item._id || item.id || '');
+      const title = (item.title || '').trim().toLowerCase();
+
+      if (id && seenIds.has(id)) return;
+      if (title && seenTitles.has(title)) return;
+
+      if (id) seenIds.add(id);
+      if (title) seenTitles.add(title);
+      combinedResults.push(item);
+    });
+
+    return combinedResults;
   }
 
   async getAllProducts(req) {

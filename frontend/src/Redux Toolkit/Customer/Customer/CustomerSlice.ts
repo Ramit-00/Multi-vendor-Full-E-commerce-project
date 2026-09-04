@@ -3,6 +3,21 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createHomeCategories, fetchHomePageData } from './AsyncThunk';
 import { type HomeCategory, type HomeData } from '../../../types/homeDataTypes';
 
+import { homeCategories } from '../../../data/homeCategories';
+
+const defaultHomePageData: HomeData = {
+  _id: 1,
+  electricCategories: homeCategories.filter((c) => c.section === 'ELECTRIC_CATEGORIES') as any,
+  grid: homeCategories.filter((c) => c.section === 'GRID') as any,
+  shopByCategories: homeCategories.filter((c) => c.section === 'SHOP_BY_CATEGORIES') as any,
+  deals: homeCategories.filter((c) => c.section === 'DEALS').map((cat, idx) => ({
+    _id: `default_deal_${idx}`,
+    discount: [20, 30, 40, 50, 15, 25][idx % 6],
+    category: cat as any,
+  })),
+  dealCategories: homeCategories.filter((c) => c.section === 'DEALS') as any,
+};
+
 interface HomeState {
   homePageData: HomeData | null;
   homeCategories: HomeCategory[];
@@ -11,7 +26,7 @@ interface HomeState {
 }
 
 const initialState: HomeState = {
-  homePageData:null,
+  homePageData: defaultHomePageData,
   homeCategories: [],
   loading: false,
   error: null,

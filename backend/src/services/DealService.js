@@ -3,6 +3,11 @@ const HomeCategory = require("../models/HomeCategory");
 
 class DealService {
   async getDeals() {
+    const mongoose = require("mongoose");
+    const isDbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+    if (!isDbConnected && process.env.ALLOW_OFFLINE === "true") {
+      return [];
+    }
     return await Deal.find().populate({ path: "category" });
   }
 

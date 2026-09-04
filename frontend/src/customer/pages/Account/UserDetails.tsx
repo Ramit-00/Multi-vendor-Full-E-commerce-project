@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Avatar,
   Button,
@@ -7,9 +7,12 @@ import {
   DialogContent,
   DialogTitle,
   TextField,
-  Chip
+  Chip,
+  CircularProgress,
+  Alert
 } from "@mui/material";
-import { useAppSelector } from "../../../Redux Toolkit/Store";
+import { useAppDispatch, useAppSelector } from "../../../Redux Toolkit/Store";
+import { updateUserProfile } from "../../../Redux Toolkit/Customer/UserSlice";
 import { useNavigate } from "react-router-dom";
 import BadgeIcon from '@mui/icons-material/Badge';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
@@ -30,6 +33,7 @@ import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 
 const UserDetails = () => {
+  const dispatch = useAppDispatch();
   const { user, orders, sellers } = useAppSelector((store) => store);
   const navigate = useNavigate();
 
@@ -43,12 +47,46 @@ const UserDetails = () => {
 
   const [editOpen, setEditOpen] = useState(false);
   const [fullName, setFullName] = useState(currentUser?.fullName || "");
+  const [mobile, setMobile] = useState(currentUser?.mobile || "");
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
-  const handleSaveProfile = () => {
+  useEffect(() => {
     if (currentUser) {
-      currentUser.fullName = fullName;
+      setFullName(currentUser.fullName || "");
+      setMobile(currentUser.mobile || "");
     }
-    setEditOpen(false);
+  }, [currentUser]);
+
+  const handleOpenEdit = () => {
+    setFullName(currentUser?.fullName || "");
+    setMobile(currentUser?.mobile || "");
+    setErrorMsg("");
+    setSuccessMsg("");
+    setEditOpen(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!fullName.trim()) {
+      setErrorMsg("Full name is required.");
+      return;
+    }
+    setSaving(true);
+    setErrorMsg("");
+    try {
+      const jwt = localStorage.getItem("jwt") || localStorage.getItem("customer_jwt") || "";
+      await dispatch(updateUserProfile({ fullName: fullName.trim(), mobile: mobile.trim(), jwt })).unwrap();
+      setSuccessMsg("Profile updated successfully!");
+      setTimeout(() => {
+        setEditOpen(false);
+        setSaving(false);
+        setSuccessMsg("");
+      }, 700);
+    } catch (err: any) {
+      setErrorMsg(typeof err === "string" ? err : "Failed to update profile. Please try again.");
+      setSaving(false);
+    }
   };
 
   // If this user is a seller, render the Seller Profile view
@@ -331,10 +369,7 @@ const UserDetails = () => {
           {/* Quick Action Button */}
           <div className="flex gap-2.5 shrink-0">
             <Button
-              onClick={() => {
-                setFullName(currentUser?.fullName || "");
-                setEditOpen(true);
-              }}
+              onClick={handleOpenEdit}
               variant="outlined"
               size="small"
               startIcon={<EditIcon sx={{ fontSize: 16 }} />}
@@ -430,6 +465,16 @@ const UserDetails = () => {
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex items-center justify-between">
               <div className="flex items-center gap-3">
+                <PhoneOutlinedIcon sx={{ fontSize: 18, color: "#64748B" }} />
+                <div>
+                  <p className="text-[11px] uppercase font-bold text-slate-400">Mobile Number</p>
+                  <p className="font-semibold text-slate-800 text-sm">{currentUser?.mobile || "Not provided"}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <EmailOutlinedIcon sx={{ fontSize: 18, color: "#64748B" }} />
                 <div>
                   <p className="text-[11px] uppercase font-bold text-slate-400">Email Address</p>
@@ -509,7 +554,7 @@ const UserDetails = () => {
       {/* Edit Profile Dialog */}
       <Dialog
         open={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => !saving && setEditOpen(false)}
         maxWidth="xs"
         fullWidth
         PaperProps={{
@@ -520,25 +565,57 @@ const UserDetails = () => {
           Edit Profile Information
         </DialogTitle>
         <DialogContent className="space-y-4 pt-2">
+          {errorMsg && (
+            <Alert severity="error" sx={{ mb: 2, borderRadius: "8px" }}>
+              {errorMsg}
+            </Alert>
+          )}
+          {successMsg && (
+            <Alert severity="success" sx={{ mb: 2, borderRadius: "8px" }}>
+              {successMsg}
+            </Alert>
+          )}
           <TextField
             fullWidth
             label="Full Name"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             size="small"
+            required
             sx={{ mt: 1 }}
+          />
+          <TextField
+            fullWidth
+            label="Contact Mobile"
+            placeholder="e.g. 9876543210"
+            value={mobile}
+            onChange={(e) => setMobile(e.target.value)}
+            size="small"
+            sx={{ mt: 2 }}
+          />
+          <TextField
+            fullWidth
+            label="Email Address"
+            value={currentUser?.email || ""}
+            disabled
+            size="small"
+            helperText="Email cannot be changed directly as it is linked to your authentication."
+            sx={{ mt: 2 }}
           />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button
             onClick={() => setEditOpen(false)}
+            disabled={saving}
             sx={{ textTransform: "none", color: "#64748B", fontWeight: 600 }}
           >
             Cancel
           </Button>
           <Button
             onClick={handleSaveProfile}
+            disabled={saving}
             variant="contained"
+            startIcon={saving ? <CircularProgress size={16} color="inherit" /> : null}
             sx={{
               backgroundColor: "#1E40AF",
               "&:hover": { backgroundColor: "#1E3A8A" },
@@ -548,7 +625,7 @@ const UserDetails = () => {
               px: 3
             }}
           >
-            Save Changes
+            {saving ? "Saving..." : "Save Changes"}
           </Button>
         </DialogActions>
       </Dialog>

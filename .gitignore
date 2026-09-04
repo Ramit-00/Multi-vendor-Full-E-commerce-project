@@ -64,7 +64,11 @@ $RECYCLE.BIN/
 # =======================================================
 # Temporary & Scratch Files
 # =======================================================
-utputFormat
 *.tmp
 *.temp
 scratch/
+.cache/
+.vite/
+frontend/.vite/
+coverage/
+.eslintcache

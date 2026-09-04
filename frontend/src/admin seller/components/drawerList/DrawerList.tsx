@@ -26,6 +26,7 @@ const DrawerList = ({ toggleDrawer, menu, menu2 }: DrawerListProps) => {
 
     const handleLogout = () => {
         localStorage.removeItem("seller_jwt");
+        localStorage.removeItem("admin_jwt");
         localStorage.removeItem("role");
         localStorage.removeItem("seller_role");
         dispatch(resetSellerProfile());
