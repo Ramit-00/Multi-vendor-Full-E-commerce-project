@@ -41,7 +41,7 @@ export default function CouponTable() {
     const dispatch = useAppDispatch();
 
     const handleDeleteCoupon = (id:string)=>() => {
-        dispatch(deleteCoupon({ id, jwt: localStorage.getItem("jwt") || "" }))
+        dispatch(deleteCoupon({ id, jwt: localStorage.getItem("admin_jwt") || localStorage.getItem("jwt") || "" }))
     }
 
 

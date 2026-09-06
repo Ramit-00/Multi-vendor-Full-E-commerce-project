@@ -19,12 +19,16 @@ const initialState: AiChatBotState = {
 // Define the async thunk for sending the message to the chatbot
 export const chatBot = createAsyncThunk<
   any,
-  { prompt: any; productId: number | null | undefined; userId: number | null }
+  { prompt: any; productId?: number | string | null; userId?: number | string | null }
 >(
   "aiChatBot/generateResponse",
   async ({ prompt, productId, userId }, { rejectWithValue }) => {
     try {
-      const response = await api.post("/chat", prompt, {
+      const userText = typeof prompt === "object" 
+        ? (prompt.message || prompt.prompt || "") 
+        : prompt;
+
+      const response = await api.post("/chat", { message: userText, prompt: userText }, {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("jwt")}`,
@@ -34,36 +38,55 @@ export const chatBot = createAsyncThunk<
           productId,
         },
       });
-      console.log("response ", productId, response.data);
-      return response.data;
+      console.log("chatBot response:", productId, response.data);
+      const answer = response.data?.answer || response.data?.message || (typeof response.data === 'string' ? response.data : "How can I assist your shopping today?");
+      return answer;
     } catch (error: any) {
-      console.log("error ", error.response);
+      console.log("chatBot error:", error.response || error);
       return rejectWithValue(
-        error.response?.data?.message || "Failed to generate chatbot response"
+        error.response?.data?.message || error.message || "Failed to generate chatbot response"
       );
     }
   }
 );
 
 export const askProductQuestion = createAsyncThunk<
-  any,any
+  any,
+  { productId?: number | string | null; question: string }
 >(
   "aiChatBot/askProductQuestion",
   async ({ productId, question }, { rejectWithValue }) => {
     try {
-      const response = await api.post<{ answer: string }>(
+      if (!productId || productId === "undefined" || productId === "null") {
+        const response = await api.post("/chat", { message: question, prompt: question }, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("jwt")}`,
+          }
+        });
+        const answer = response.data?.answer || response.data?.message || (typeof response.data === 'string' ? response.data : "How can I assist your shopping today?");
+        return answer;
+      }
+
+      const response = await api.post<{ answer: string; message?: string }>(
         `/chat/product/${productId}`,
-        { question }
+        { question, message: question },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("jwt")}`,
+          }
+        }
       );
-      console.log("chat answer ----- ",response.data)
-      return response.data.answer;
-      
+      console.log("chat answer ----- ", response.data);
+      return response.data?.answer || response.data?.message || "I am here to help you!";
     } catch (error: any) {
-      console.log("error --- ",error)
+      console.log("askProductQuestion error --- ", error);
       const message =
         error.response?.data?.message ||
+        error.response?.data?.error ||
         error.message ||
-        "Failed to get answer";
+        "I'm experiencing a brief connection issue. Please try asking again in a moment.";
       return rejectWithValue(message);
     }
   }
@@ -80,39 +103,34 @@ const aiChatBotSlice = createSlice({
         state.loading = true;
         state.error = null;
         const { prompt } = action.meta.arg;
-
-        // You can log or use the data here
-        // console.log('Pending request:', { prompt, productId, userId });
-        const userPrompt = { message: prompt.prompt, role: "user" };
-        state.messages = [...state.messages, userPrompt];
+        const text = typeof prompt === "object" ? (prompt.message || prompt.prompt || "") : prompt;
+        state.messages.push({ role: "user", message: text });
       })
       .addCase(chatBot.fulfilled, (state, action) => {
         state.loading = false;
         state.response = action.payload;
-        state.messages = [...state.messages, action.payload];
+        state.messages.push({ role: "res", message: action.payload });
       })
       .addCase(chatBot.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload as string;
+        const fallbackMsg = (action.payload as string) || "I'm having a little trouble connecting right now, please try again in a moment!";
+        state.messages.push({ role: "res", message: fallbackMsg });
       })
-      .addCase(askProductQuestion.pending, (state,action) => {
+      .addCase(askProductQuestion.pending, (state, action) => {
         state.loading = true;
-        // state.productQuestion.error = null;
-        // state.productQuestion.answer = null;
-        state.messages.push({role:"user",message:action.meta.arg.question})
+        state.error = null;
+        state.messages.push({ role: "user", message: action.meta.arg.question });
       })
-      .addCase(
-        askProductQuestion.fulfilled,
-        (state, action) => {
-          state.loading = false;
-          // state.productQuestion.answer = action.payload;
-          console.log("ans - ", action.payload)
-          state.messages.push({role:'res',message:action.payload})
-        }
-      )
-      .addCase(askProductQuestion.rejected, (state) => {
+      .addCase(askProductQuestion.fulfilled, (state, action) => {
         state.loading = false;
-        // state.productQuestion.error = action.payload as string;
+        state.messages.push({ role: "res", message: action.payload });
+      })
+      .addCase(askProductQuestion.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload as string;
+        const fallbackMsg = (action.payload as string) || "I'm having a little trouble retrieving details right now, please try again in a moment!";
+        state.messages.push({ role: "res", message: fallbackMsg });
       });
   },
 });

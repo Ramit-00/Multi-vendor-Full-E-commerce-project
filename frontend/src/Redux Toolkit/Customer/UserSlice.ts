@@ -4,8 +4,16 @@ import { type User, type UserState, type Address } from "../../types/userTypes";
 import { api } from "../../Config/Api";
 import { type RootState } from "../Store";
 
+const getStoredUser = (): User | null => {
+  try {
+    const raw = localStorage.getItem("user_profile");
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return null;
+};
+
 const initialState: UserState = {
-  user: null,
+  user: getStoredUser(),
   loading: false,
   error: null,
   profileUpdated: false,
@@ -16,11 +24,11 @@ const API_URL = "/api/users";
 
 export const fetchUserProfile = createAsyncThunk<
   User,
-  { jwt: string; navigate: any }
+  { jwt: string; navigate?: any }
 >(
   "user/fetchUserProfile",
   async (
-    { jwt, navigate }: { jwt: string; navigate: any },
+    { jwt }: { jwt: string; navigate?: any },
     { rejectWithValue }
   ) => {
     try {
@@ -28,9 +36,6 @@ export const fetchUserProfile = createAsyncThunk<
         headers: { Authorization: `Bearer ${jwt}` },
       });
       console.log(" user profile ", response.data);
-      if (response.data.role === "ROLE_ADMIN") {
-        navigate("/admin");
-      }
       return response.data;
     } catch (error: any) {
       console.log("error ", error.response);
@@ -112,6 +117,15 @@ const userSlice = createSlice({
       state.loading = false;
       state.error = null;
       state.profileUpdated = false;
+      try {
+        localStorage.removeItem("user_profile");
+      } catch (e) {}
+    },
+    setUserProfile: (state, action: PayloadAction<User>) => {
+      state.user = action.payload;
+      try {
+        localStorage.setItem("user_profile", JSON.stringify(action.payload));
+      } catch (e) {}
     },
     addLocalAddress: (state, action: PayloadAction<Address>) => {
       if (!state.user) {
@@ -148,6 +162,9 @@ const userSlice = createSlice({
         (state, action: PayloadAction<User>) => {
           state.user = action.payload;
           state.loading = false;
+          try {
+            localStorage.setItem("user_profile", JSON.stringify(action.payload));
+          } catch (e) {}
         }
       )
       .addCase(fetchUserProfile.rejected, (state, action) => {
@@ -206,6 +223,9 @@ const userSlice = createSlice({
           }
           state.loading = false;
           state.profileUpdated = true;
+          try {
+            localStorage.setItem("user_profile", JSON.stringify(state.user));
+          } catch (e) {}
         }
       )
       .addCase(updateUserProfile.rejected, (state, action) => {
@@ -215,7 +235,7 @@ const userSlice = createSlice({
   },
 });
 
-export const { resetUserState, addLocalAddress, removeLocalAddress } = userSlice.actions;
+export const { resetUserState, setUserProfile, addLocalAddress, removeLocalAddress } = userSlice.actions;
 
 export default userSlice.reducer;
 

@@ -1,32 +1,37 @@
 const ChatbotService = require("../services/ChatbotService.js");
-const ChatboatService = require("../services/ChatbotService.js");
 
 class ChatboatController {
   async simpleChat(req, res) {
     try {
-      const message = req.body.message;
+      const message = req.body.message || req.body.prompt || req.body.question;
 
       const contents = [
         {
           role: "user",
-          parts: [{ text: message }],
+          parts: [{ text: message || "Hello" }],
         },
       ];
 
-      const data = await ChatboatService.chatService(contents);
-      return res.status(200).json(data);
+      const data = await ChatbotService.chatService(contents);
+      return res.status(200).json({ answer: data, message: data });
     } catch (error) {
-      return res.status(500).json({ error: error.message });
+      console.error("[ChatboatController] simpleChat error:", error);
+      return res.status(500).json({ error: error.message, message: error.message });
     }
   }
 
   async askProductQuestionController(req, res) {
     try {
       const { productId } = req.params;
-      const { question } = req.body;
+      const question = req.body.question || req.body.message || req.body.prompt;
 
       if (!question) {
         return res.status(400).json({ message: "Question is required" });
+      }
+
+      if (!productId || productId === "undefined" || productId === "null") {
+        const answer = await ChatbotService.chatService(question);
+        return res.status(200).json({ answer, message: answer });
       }
 
       const answer = await ChatbotService.askProductQuestion(
@@ -34,13 +39,14 @@ class ChatboatController {
         question
       );
 
-      res.status(200).json({ answer });
+      return res.status(200).json({ answer, message: answer });
     } catch (error) {
-      console.error("Controller Error:", error);
-      res
+      console.error("[ChatboatController] Controller Error:", error);
+      return res
         .status(500)
         .json({
           message: "Something went wrong while processing the question",
+          error: error.message,
         });
     }
   }

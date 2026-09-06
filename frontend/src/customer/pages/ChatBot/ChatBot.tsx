@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "../../../Redux Toolkit/Store";
-import { askProductQuestion} from "../../../Redux Toolkit/Customer/AiChatBotSlice";
+import { askProductQuestion, chatBot } from "../../../Redux Toolkit/Customer/AiChatBotSlice";
 import { Button, IconButton } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import PromptMessage from "./PromptMessage";
@@ -9,7 +9,7 @@ import CloseIcon from '@mui/icons-material/Close';
 
 interface ChatBotProps{
     handleClose:(e:any)=>void;
-    productId?:number
+    productId?:number | string;
 }
 
 const ChatBot = ({handleClose,productId}:ChatBotProps) => {
@@ -19,20 +19,27 @@ const ChatBot = ({handleClose,productId}:ChatBotProps) => {
   
     const {aiChatBot}=useAppSelector(store=>store);
 
-    console.log("ai chat Bot",aiChatBot)
+    const handleGivePrompt = (e?:any) => {
+        if (e && e.stopPropagation) {
+            e.stopPropagation();
+        }
+        const trimmed = prompt.trim();
+        if (!trimmed) return;
 
-    const handleGivePrompt = (e:any) => {
-        e.stopPropagation()
-        // dispatch(chatBot({ prompt: { prompt }, productId, userId: null }));
+        if (productId) {
+            dispatch(askProductQuestion({
+                productId,
+                question: trimmed
+            }));
+        } else {
+            dispatch(chatBot({
+                prompt: trimmed,
+                productId: null,
+                userId: null
+            }));
+        }
 
-        dispatch(askProductQuestion({
-            productId,
-            question:prompt
-        }))
-
-        setPrompt("")
-
-        console.log("prompt ", productId, prompt)
+        setPrompt("");
     };
 
     const handlePromptChange = (e: any) => {
@@ -97,9 +104,15 @@ const ChatBot = ({handleClose,productId}:ChatBotProps) => {
                 <div className=" h-[10%] flex items-center">
                     <input
                         onChange={handlePromptChange}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                handleGivePrompt(e);
+                            }
+                        }}
                         value={prompt}
                         type="text"
-                        placeholder="give your prompt"
+                        placeholder={productId ? "Ask about this product..." : "Ask AI about products, orders, deals..."}
                         className="rounded-bl-lg pl-5 h-full w-full bg-slate-100 border-none outline-none"
                     />
                     <Button

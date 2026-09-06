@@ -26,6 +26,7 @@ import CustomerSlice from "./Customer/Customer/CustomerSlice";
 import DealSlice from "./Admin/DealSlice";
 import AdminSlice from "./Admin/AdminSlice";
 import adminPlatformSlice from "./Admin/AdminPlatformSlice";
+import NotificationSlice from "./Customer/NotificationSlice";
 
 const rootReducer = combineReducers({
   
@@ -40,6 +41,7 @@ const rootReducer = combineReducers({
   wishlist: WishlistSlice,
   aiChatBot: AiChatBotSlice,
   homePage:CustomerSlice,
+  notifications: NotificationSlice,
 
   // seller
   sellers: sellerSlice,

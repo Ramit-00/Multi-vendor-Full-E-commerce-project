@@ -6,7 +6,7 @@ import { fetchAllCoupons } from '../../../Redux Toolkit/Admin/AdminCouponSlice'
 const Coupon = () => {
     const dispatch = useAppDispatch()
     useEffect(() => {
-        dispatch(fetchAllCoupons(localStorage.getItem("jwt") || ""))
+        dispatch(fetchAllCoupons(localStorage.getItem("admin_jwt") || localStorage.getItem("jwt") || ""))
     }, [])
     return (
         <div>

@@ -6,7 +6,14 @@ import { useAppSelector } from "../../../../Redux Toolkit/Store";
 
 export default function DealSlider() {
   const { homePage } = useAppSelector((store) => store);
-  const deals = homePage.homePageData?.deals || [];
+  const rawDeals = homePage.homePageData?.deals || [];
+  const seen = new Set<string>();
+  const deals = rawDeals.filter((item: any) => {
+    const key = String(item.category?.categoryId || item.category?._id || item.category?.name || item._id || '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   if (deals.length === 0) return null;
 

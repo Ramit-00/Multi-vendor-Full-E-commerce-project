@@ -67,6 +67,8 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 scratch/
+.offline_cache.json
+backend/.offline_cache.json
 .cache/
 .vite/
 frontend/.vite/

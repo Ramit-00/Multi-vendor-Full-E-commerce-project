@@ -219,10 +219,10 @@ const Navbar = () => {
               }}
             >
               <Avatar sx={{ width: 28, height: 28, bgcolor: "#0F172A", color: "#fff", fontSize: 12, fontWeight: 700 }}>
-                {user.user?.fullName?.[0]?.toUpperCase() || "U"}
+                {user.user?.fullName?.[0]?.toUpperCase() || user.user?.email?.[0]?.toUpperCase() || "U"}
               </Avatar>
               <span className="font-semibold hidden lg:block text-slate-800 text-xs pl-2 pr-1">
-                {user.user?.fullName?.split(" ")[0]}
+                {user.user?.fullName ? user.user.fullName.split(" ")[0] : (user.user?.email ? user.user.email.split("@")[0] : "Account")}
               </span>
             </Button>
           ) : (

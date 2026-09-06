@@ -16,7 +16,7 @@ class OrderService {
     try {
       if (!shippingAddress) {
         shippingAddress = {
-          name: user.fullName || "Valued Customer",
+          name: user.fullName || (user.email ? user.email.split('@')[0] : "Customer"),
           address: "Default Delivery Address",
           locality: "Main",
           city: "New Delhi",

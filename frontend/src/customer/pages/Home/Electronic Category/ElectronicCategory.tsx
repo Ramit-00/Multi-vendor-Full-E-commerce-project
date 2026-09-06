@@ -5,7 +5,15 @@ import { useAppSelector } from "../../../../Redux Toolkit/Store";
 const ElectronicCategory = () => {
   const { homePage } = useAppSelector((store) => store);
   const isSmallScreen = useMediaQuery("(max-width:640px)");
-  const categories = homePage.homePageData?.electricCategories || [];
+  const rawCategories = homePage.homePageData?.electricCategories || [];
+  // Ensure strict uniqueness so categories like Headphones or Smartwatch never duplicate
+  const seen = new Set<string>();
+  const categories = rawCategories.filter((item: any) => {
+    const key = String(item.categoryId || item.name || '').toLowerCase().trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   if (categories.length === 0) return null;
 
