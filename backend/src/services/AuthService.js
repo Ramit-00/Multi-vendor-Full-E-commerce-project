@@ -8,11 +8,70 @@ const Cart = require('../models/Cart');
 const jwtProvider = require('../utils/jwtProvider');
 const UserError = require('../exceptions/UserError');
 
+const path = require('path');
+const fs = require('fs');
+
+const OFFLINE_CACHE_FILE = path.join(__dirname, '..', '..', '.offline_cache.json');
+
+function formatDefaultName(email) {
+    if (!email) return 'User';
+    const namePart = email.split('@')[0].replace(/[0-9._-]+/g, ' ').trim();
+    if (!namePart) return 'User';
+    return namePart.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
 class AuthService {
     constructor() {
         // in-memory fallback stores for dev/offline resilience
         this.fallbackStore = new Map();
         this.fallbackUsers = new Map();
+        this._loadOfflineCache();
+    }
+
+    _loadOfflineCache() {
+        try {
+            if (fs.existsSync(OFFLINE_CACHE_FILE)) {
+                const raw = fs.readFileSync(OFFLINE_CACHE_FILE, 'utf-8');
+                const data = JSON.parse(raw);
+                if (data && typeof data === 'object') {
+                    for (const [key, val] of Object.entries(data)) {
+                        this.fallbackUsers.set(key.toLowerCase().trim(), val);
+                    }
+                    console.log(`[AuthService] Loaded ${this.fallbackUsers.size} user profile(s) from offline disk cache`);
+                }
+            }
+        } catch (e) {
+            console.warn('[AuthService] Could not read .offline_cache.json:', e.message);
+        }
+    }
+
+    _saveOfflineCache() {
+        try {
+            const obj = {};
+            for (const [key, val] of this.fallbackUsers.entries()) {
+                obj[key] = val;
+            }
+            fs.writeFileSync(OFFLINE_CACHE_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+        } catch (e) {
+            console.warn('[AuthService] Could not save .offline_cache.json:', e.message);
+        }
+    }
+
+    setFallbackUser(email, user) {
+        if (!email) return;
+        const key = email.toLowerCase().trim();
+        this.fallbackUsers.set(key, user);
+        this._saveOfflineCache();
+    }
+
+    getFallbackUser(email) {
+        if (!email) return null;
+        const key = email.toLowerCase().trim();
+        return this.fallbackUsers.get(key) || null;
+    }
+
+    formatDefaultName(email) {
+        return formatDefaultName(email);
     }
 
     _validateEmail(email) {
@@ -155,6 +214,8 @@ class AuthService {
                 email,
                 fullName,
                 role: 'ROLE_CUSTOMER',
+                accountType: 'CUSTOMER',
+                status: 'ACTIVE',
                 mobile: req.mobile || "",
                 password: await bcrypt.hash(otp, 10)
             });
@@ -163,15 +224,28 @@ class AuthService {
 
             const cart = new Cart({ user: user._id });
             await cart.save();
+
+            // Always keep fallback disk cache synced
+            this.setFallbackUser(email, user.toObject ? user.toObject() : user);
         } else {
+            const existingFallback = this.getFallbackUser(email);
+            if (existingFallback) {
+                throw new UserError("An account with this email already exists. Please log in.");
+            }
+
             user = {
                 _id: `offline_${email}`,
                 email,
-                fullName,
+                fullName: fullName || formatDefaultName(email),
                 role: 'ROLE_CUSTOMER',
-                mobile: req.mobile || ""
+                accountType: 'CUSTOMER',
+                status: 'ACTIVE',
+                mobile: req.mobile || "",
+                addresses: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
             };
-            this.fallbackUsers.set(email, user);
+            this.setFallbackUser(email, user);
         }
 
         const token = jwtProvider.createJwt({ email, role: 'ROLE_CUSTOMER', type: 'CUSTOMER' });
@@ -195,9 +269,28 @@ class AuthService {
 
         let user;
         if (dbConnected) {
-            user = await User.findOne({ email });
+            user = await User.findOne({ email }).populate("addresses");
+            if (user) {
+                // Keep fallback cache updated
+                this.setFallbackUser(email, user.toObject ? user.toObject() : user);
+            }
         } else {
-            user = this.fallbackUsers.get(email) || { _id: `offline_${email}`, email, fullName: "Demo User", role: 'ROLE_CUSTOMER' };
+            user = this.getFallbackUser(email);
+            if (!user) {
+                user = { 
+                    _id: `offline_${email}`, 
+                    email, 
+                    fullName: formatDefaultName(email), 
+                    role: 'ROLE_CUSTOMER',
+                    accountType: 'CUSTOMER',
+                    status: 'ACTIVE',
+                    mobile: '',
+                    addresses: [],
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                this.setFallbackUser(email, user);
+            }
         }
 
         if (!user && !seller) {
@@ -298,19 +391,24 @@ class AuthService {
                     throw new UserError("Your account has been suspended or banned by administration.");
                 }
             }
+            // Sync MongoDB user with fallback disk cache
+            this.setFallbackUser(email, user.toObject ? user.toObject() : user);
         } else {
-            user = this.fallbackUsers.get(email);
+            user = this.getFallbackUser(email);
             if (!user) {
                 user = {
                     _id: `offline_${email}`,
                     email,
-                    fullName,
+                    fullName: fullName || formatDefaultName(email),
                     role: 'ROLE_CUSTOMER',
                     accountType: 'CUSTOMER',
                     status: 'ACTIVE',
                     mobile: '',
+                    addresses: [],
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
                 };
-                this.fallbackUsers.set(email, user);
+                this.setFallbackUser(email, user);
             }
         }
 

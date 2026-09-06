@@ -105,7 +105,9 @@ const AdminDrawer: React.FC<AdminDrawerProps> = ({ toggleDrawer }) => {
         </div>
 
         {menuItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive =
+            location.pathname === item.path ||
+            (item.path === "/admin" && location.pathname === "/admin/");
           return (
             <div
               key={item.name}

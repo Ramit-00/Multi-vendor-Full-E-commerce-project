@@ -81,7 +81,7 @@ const CouponForm: React.FC = () => {
       dispatch(
         createCoupon({
           coupon: formattedValues,
-          jwt: localStorage.getItem("jwt") || "",
+          jwt: localStorage.getItem("admin_jwt") || localStorage.getItem("jwt") || "",
         })
       );
       // Submit form values to the backend

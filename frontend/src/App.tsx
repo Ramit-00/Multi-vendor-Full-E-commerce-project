@@ -2,7 +2,7 @@ import './App.css';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import customeTheme from './Theme/customeTheme';
 
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import ScrollToTop from './components/ScrollToTop';
 
 import SellerDashboard from './seller/pages/SellerDashboard/SellerDashboard';
@@ -23,7 +23,6 @@ import { homeCategories } from './data/homeCategories';
 function App() {
   const dispatch = useAppDispatch();
   const { auth, sellerAuth } = useAppSelector((store) => store);
-  const navigate = useNavigate();
 
   useEffect(() => {
     const activeRole = localStorage.getItem("role");
@@ -39,9 +38,9 @@ function App() {
     if (activeRole === "ROLE_SELLER" || sellerJwt) {
       dispatch(fetchSellerProfile(sellerJwt || customerJwt || ""));
     } else if (customerJwt) {
-      dispatch(fetchUserProfile({ jwt: customerJwt, navigate }));
+      dispatch(fetchUserProfile({ jwt: customerJwt }));
     }
-  }, [auth.jwt, sellerAuth.jwt, dispatch, navigate]);
+  }, [auth.jwt, sellerAuth.jwt, dispatch]);
 
   useEffect(() => {
     dispatch(createHomeCategories(homeCategories));

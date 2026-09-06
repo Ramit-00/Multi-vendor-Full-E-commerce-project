@@ -10,7 +10,7 @@ import {
 } from '../../types/authTypes';
 import { api } from '../../Config/Api';
 import { type RootState } from '../Store';
-import { resetUserState, fetchUserProfile } from './UserSlice';
+import { resetUserState, fetchUserProfile, setUserProfile } from './UserSlice';
 import { resetCartState } from './CartSlice';
 import { resetSellerProfile, fetchSellerProfile } from '../Seller/sellerSlice';
 import axios from 'axios';
@@ -59,6 +59,7 @@ export const signup = createAsyncThunk<AuthResponse, SignupRequest>(
             localStorage.removeItem("seller_jwt");
             localStorage.removeItem("seller_role");
             dispatch(resetSellerProfile());
+            dispatch(fetchUserProfile({ jwt: response.data.jwt }));
             signupRequest.navigate("/");
             return response.data;
         } catch (error: any) {
@@ -89,6 +90,10 @@ export const signin = createAsyncThunk<AuthResponse, LoginRequest>(
                 localStorage.removeItem("seller_jwt");
                 localStorage.removeItem("seller_role");
                 dispatch(resetSellerProfile());
+                if (response.data.user) {
+                    dispatch(setUserProfile(response.data.user));
+                }
+                dispatch(fetchUserProfile({ jwt: response.data.jwt }));
                 loginRequest.navigate("/");
             }
             return response.data;
@@ -265,6 +270,7 @@ export const performLogout = () => async (dispatch: any) => {
     localStorage.removeItem("jwt");
     localStorage.removeItem("role");
     localStorage.removeItem("customer_role");
+    localStorage.removeItem("user_profile");
     dispatch(logout());
     dispatch(resetUserState());
     dispatch(resetCartState());

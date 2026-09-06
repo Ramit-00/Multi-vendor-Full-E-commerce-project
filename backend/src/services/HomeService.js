@@ -3,22 +3,44 @@ const Deal = require('../models/Deal');
 
 class HomeService {
     async createHomePageData(allCategories) {
-        // Filter categories based on their section
-        const gridCategories = allCategories.filter(category => 
+        // Helper to deduplicate by categoryId or name
+        const dedupeByCategory = (list) => {
+            const seen = new Set();
+            return list.filter(item => {
+                const key = (item.categoryId || item.name || '').toLowerCase().trim();
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        };
+
+        // Helper for grid editorial items (distinguished by image or categoryId)
+        const dedupeGrid = (list) => {
+            const seen = new Set();
+            return list.filter(item => {
+                const key = (item.image || item.categoryId || item.name || '').toLowerCase().trim();
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        };
+
+        // Filter and deduplicate categories based on their section
+        const gridCategories = dedupeGrid(allCategories.filter(category => 
             category.section === HomeCategorySection.GRID
-        );
+        ));
 
-        const shopByCategories = allCategories.filter(category => 
+        const shopByCategories = dedupeByCategory(allCategories.filter(category => 
             category.section === HomeCategorySection.SHOP_BY_CATEGORIES
-        );
+        ));
 
-        const electricCategories = allCategories.filter(category => 
+        const electricCategories = dedupeByCategory(allCategories.filter(category => 
             category.section === HomeCategorySection.ELECTRIC_CATEGORIES
-        );
+        ));
 
-        const dealCategories = allCategories.filter(category => 
+        const dealCategories = dedupeByCategory(allCategories.filter(category => 
             category.section === HomeCategorySection.DEALS
-        );
+        ));
 
         // Check if there are existing deals
         const mongoose = require('mongoose');
@@ -55,11 +77,21 @@ class HomeService {
             }));
         }
 
+        // Deduplicate deals by category
+        const seenDealCategories = new Set();
+        const uniqueDeals = createdDeals.filter(deal => {
+            const cat = deal.category;
+            const key = cat ? (cat.categoryId || cat._id || cat.name) : deal._id;
+            if (!key || seenDealCategories.has(String(key))) return false;
+            seenDealCategories.add(String(key));
+            return true;
+        });
+
         const home = {
             grid: gridCategories,
             shopByCategories: shopByCategories,
             electricCategories: electricCategories,
-            deals: createdDeals,
+            deals: uniqueDeals,
             dealCategories: dealCategories
         };
 

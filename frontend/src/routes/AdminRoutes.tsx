@@ -14,6 +14,8 @@ import Deal from "../admin/pages/Home Page/Deal";
 const AdminRoutes = () => {
   return (
     <Routes>
+      <Route index element={<AdminOverviewDashboard />} />
+      <Route path="" element={<AdminOverviewDashboard />} />
       <Route path="/" element={<AdminOverviewDashboard />} />
       <Route path="/users" element={<UsersTable />} />
       <Route path="/sellers" element={<SellersTable />} />
@@ -25,6 +27,7 @@ const AdminRoutes = () => {
       <Route path="/electronics-category" element={<ElectronicsTable />} />
       <Route path="/shop-by-category" element={<ShopByCategoryTable />} />
       <Route path="/deals" element={<Deal />} />
+      <Route path="*" element={<AdminOverviewDashboard />} />
     </Routes>
   );
 };
