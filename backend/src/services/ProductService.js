@@ -1,22 +1,91 @@
-const Product = require("../models/Product");
-const Category = require("../models/Category");
-const mongoose = require("mongoose");
-const ProductError = require("../exceptions/ProductError");
+const fs = require('fs');
+const path = require('path');
+const mongoose = require('mongoose');
+
+const prisma = require('../config/prisma');
+const ProductDetails = require('../models/ProductDetails');
+const Category = require('../models/Category');
+const ProductError = require('../exceptions/ProductError');
 
 const calculateDiscountPercentage = (mrpPrice, sellingPrice) => {
   if (mrpPrice <= 0) {
-    throw new Error("MRP must be greater than zero");
+    return 0;
   }
   const discount = mrpPrice - sellingPrice;
-  return Math.round((discount / mrpPrice) * 100);
+  return Math.max(0, Math.round((discount / mrpPrice) * 100));
 };
 
 class ProductService {
+  constructor() {
+    this._cachedCategoryProducts = null;
+  }
+
+  _dbConnected() {
+    try {
+      return mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  _formatFullProduct(core, details, category = null) {
+    if (!core) return null;
+
+    const attributes = details?.attributes || {};
+    const seller = core.seller || {};
+    const sellerUser = seller.user || {};
+    const sellerPayout = (seller.payoutAccountInfo && typeof seller.payoutAccountInfo === 'object')
+      ? seller.payoutAccountInfo
+      : {};
+
+    const formattedSeller = {
+      id: seller.id || core.sellerId,
+      _id: seller.id || core.sellerId,
+      sellerName: seller.storeName || 'Partner Seller',
+      storeName: seller.storeName || 'Partner Seller',
+      email: sellerUser.email || '',
+      mobile: sellerUser.phone || '',
+      businessDetails: sellerPayout.businessDetails || { businessName: seller.storeName || 'Partner Seller' },
+    };
+
+    const mrpPrice = Number(attributes.mrpPrice) || Number(core.price);
+    const sellingPrice = Number(core.price);
+    const discountPercent = attributes.discountPercent !== undefined
+      ? Number(attributes.discountPercent)
+      : calculateDiscountPercentage(mrpPrice, sellingPrice);
+
+    return {
+      id: core.id,
+      _id: core.id,
+      productId: core.id,
+      title: core.name,
+      name: core.name,
+      description: details?.description || '',
+      sku: core.sku,
+      price: sellingPrice,
+      sellingPrice: sellingPrice,
+      mrpPrice: mrpPrice,
+      discountPercent: discountPercent,
+      quantity: core.stockQuantity,
+      stock: core.stockQuantity,
+      status: core.status,
+      color: attributes.color || 'Standard',
+      sizes: attributes.sizes || 'FREE',
+      images: details?.images || [],
+      category: category || core.categoryId,
+      seller: formattedSeller,
+      mongoDetailsId: core.mongoDetailsId || (details?._id ? details._id.toString() : null),
+      createdAt: core.createdAt,
+      updatedAt: core.updatedAt,
+      toObject: function() { return { ...this }; },
+    };
+  }
+
   async createProduct(req, seller) {
     try {
       const discountPercentage = calculateDiscountPercentage(
-        req.mrpPrice,
-        req.sellingPrice
+        Number(req.mrpPrice) || 0,
+        Number(req.sellingPrice) || 0
       );
 
       const category1 = await this.createOrGetCategory(req.category, 1);
@@ -27,30 +96,62 @@ class ProductService {
         ? await this.createOrGetCategory(req.category3, 3, category2._id)
         : category2;
 
-      const sellerId = seller._id || seller.id || seller;
-      const product = new Product({
-        seller: sellerId,
-        category: category3._id || category3,
-        title: req.title,
-        color: req.color || "Standard",
-        description: req.description || "",
-        discountPercent: discountPercentage || 0,
-        sellingPrice: Number(req.sellingPrice),
-        images: Array.isArray(req.images) ? req.images : [req.images],
-        mrpPrice: Number(req.mrpPrice),
-        sizes: req.sizes || "FREE",
-        quantity: Number(req.quantity) || 10,
-        createdAt: new Date(),
+      const sellerId = seller?.id || seller?._id || seller;
+      const sku = req.sku || `SKU-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const stockQuantity = Number(req.quantity) || 10;
+      const price = Number(req.sellingPrice) || Number(req.mrpPrice) || 0;
+
+      // 1. Create core product in PostgreSQL
+      const coreProduct = await prisma.product.create({
+        data: {
+          sellerId: String(sellerId),
+          categoryId: String(category3._id || category3.categoryId || category3),
+          sku,
+          name: req.title,
+          price,
+          stockQuantity,
+          status: stockQuantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK',
+        },
+        include: {
+          seller: { include: { user: true } },
+        },
       });
 
-      return await product.save();
+      // 2. Create flexible details in MongoDB ProductDetails
+      let details;
+      try {
+        details = await ProductDetails.create({
+          productId: coreProduct.id,
+          description: req.description || '',
+          images: Array.isArray(req.images) ? req.images : (req.images ? [req.images] : []),
+          attributes: {
+            color: req.color || 'Standard',
+            sizes: typeof req.sizes === 'string' ? req.sizes : (Array.isArray(req.sizes) ? req.sizes.join(',') : 'FREE'),
+            discountPercent: discountPercentage,
+            mrpPrice: Number(req.mrpPrice) || price,
+          },
+        });
+
+        // Update Postgres with mongoDetailsId
+        await prisma.product.update({
+          where: { id: coreProduct.id },
+          data: { mongoDetailsId: details._id.toString() },
+        });
+      } catch (mongoErr) {
+        // Compensating transaction / rollback Postgres
+        await prisma.product.delete({ where: { id: coreProduct.id } });
+        throw new ProductError(`Failed to save product details: ${mongoErr.message}`);
+      }
+
+      return this._formatFullProduct(coreProduct, details, category3);
     } catch (error) {
-      console.log("====== ", error.message);
+      console.error('[ProductService] createProduct error:', error.message);
       throw new ProductError(error.message);
     }
   }
 
   async createOrGetCategory(categoryId, level, parentId = null) {
+    if (!categoryId) return { _id: 'cat_default', categoryId: 'general', level: 1 };
     let category = await Category.findOne({ categoryId });
     if (!category) {
       category = new Category({
@@ -63,49 +164,365 @@ class ProductService {
     return category;
   }
 
-  // Helper to check mongoose connection
-  _dbConnected() {
+  async findProductById(productId) {
+    const samples = this._getAllCategoryProducts();
+    const match = samples.find(p => p._id === productId || p.id === productId);
+    if (match) return match;
+
     try {
-      return mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-    } catch (e) {
-      return false;
+      // 1. Search PostgreSQL by UUID, sku, or mongoDetailsId
+      let core = await prisma.product.findFirst({
+        where: {
+          OR: [
+            { id: String(productId) },
+            { sku: String(productId) },
+            { mongoDetailsId: String(productId) },
+          ],
+        },
+        include: {
+          seller: { include: { user: true } },
+        },
+      });
+
+      if (core) {
+        let details = null;
+        try {
+          details = await ProductDetails.findOne({
+            $or: [
+              { productId: core.id },
+              ...(core.mongoDetailsId ? [{ _id: core.mongoDetailsId }] : []),
+            ],
+          });
+        } catch (e) {}
+
+        let category = null;
+        if (core.categoryId) {
+          try {
+            category = await Category.findById(core.categoryId);
+          } catch (e) {}
+        }
+
+        return this._formatFullProduct(core, details, category);
+      }
+    } catch (err) {
+      console.warn('[ProductService] findProductById DB notice:', err.message);
+    }
+
+    if (match) return match;
+    throw new ProductError('Product not found');
+  }
+
+  async updateProduct(productId, updatedProductData) {
+    try {
+      const core = await prisma.product.findFirst({
+        where: {
+          OR: [
+            { id: String(productId) },
+            { sku: String(productId) },
+            { mongoDetailsId: String(productId) },
+          ],
+        },
+      });
+
+      if (!core) {
+        throw new ProductError('Product not found');
+      }
+
+      const coreUpdates = {};
+      if (updatedProductData.title || updatedProductData.name) {
+        coreUpdates.name = updatedProductData.title || updatedProductData.name;
+      }
+      if (updatedProductData.sellingPrice !== undefined) {
+        coreUpdates.price = Number(updatedProductData.sellingPrice);
+      } else if (updatedProductData.price !== undefined) {
+        coreUpdates.price = Number(updatedProductData.price);
+      }
+      if (updatedProductData.quantity !== undefined) {
+        coreUpdates.stockQuantity = Number(updatedProductData.quantity);
+        coreUpdates.status = coreUpdates.stockQuantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK';
+      }
+      if (updatedProductData.status) {
+        coreUpdates.status = updatedProductData.status;
+      }
+
+      const updatedCore = await prisma.product.update({
+        where: { id: core.id },
+        data: coreUpdates,
+        include: { seller: { include: { user: true } } },
+      });
+
+      // Update Mongo ProductDetails
+      let details = await ProductDetails.findOne({
+        $or: [{ productId: core.id }, ...(core.mongoDetailsId ? [{ _id: core.mongoDetailsId }] : [])],
+      });
+
+      if (details) {
+        if (updatedProductData.description !== undefined) details.description = updatedProductData.description;
+        if (updatedProductData.images !== undefined) details.images = Array.isArray(updatedProductData.images) ? updatedProductData.images : [updatedProductData.images];
+        if (updatedProductData.color) details.attributes.color = updatedProductData.color;
+        if (updatedProductData.sizes) details.attributes.sizes = updatedProductData.sizes;
+        if (updatedProductData.mrpPrice !== undefined) details.attributes.mrpPrice = Number(updatedProductData.mrpPrice);
+        if (updatedProductData.discountPercent !== undefined) details.attributes.discountPercent = Number(updatedProductData.discountPercent);
+        await details.save();
+      }
+
+      return this._formatFullProduct(updatedCore, details);
+    } catch (error) {
+      throw new ProductError(error.message);
     }
   }
 
   async deleteProduct(productId) {
     try {
-      const product = await this.findProductById(productId);
-      await Product.findByIdAndDelete(product._id);
+      const core = await prisma.product.findFirst({
+        where: {
+          OR: [
+            { id: String(productId) },
+            { sku: String(productId) },
+            { mongoDetailsId: String(productId) },
+          ],
+        },
+      });
+
+      if (core) {
+        await prisma.product.delete({ where: { id: core.id } });
+        try {
+          await ProductDetails.deleteMany({
+            $or: [{ productId: core.id }, ...(core.mongoDetailsId ? [{ _id: core.mongoDetailsId }] : [])],
+          });
+        } catch (e) {}
+      }
     } catch (error) {
       throw new ProductError(error.message);
     }
   }
 
-  async updateProduct(productId, updatedProductData) {
+  async getProductBySellerId(sellerId) {
     try {
-      const product = await Product.findByIdAndUpdate(
-        productId,
-        { $set: updatedProductData },
-        { new: true }
-      );
-      if (!product) throw new ProductError("Product not found");
-      return product;
-    } catch (error) {
-      throw new ProductError(error.message);
+      const coreProducts = await prisma.product.findMany({
+        where: { sellerId: String(sellerId) },
+        include: { seller: { include: { user: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const productIds = coreProducts.map(p => p.id);
+      const detailsList = await ProductDetails.find({ productId: { $in: productIds } });
+      const detailsMap = new Map(detailsList.map(d => [d.productId, d]));
+
+      return coreProducts.map(p => this._formatFullProduct(p, detailsMap.get(p.id)));
+    } catch (e) {
+      console.warn('[ProductService] getProductBySellerId notice:', e.message);
+      return [];
     }
+  }
+
+  async recentlyAddedProduct() {
+    try {
+      const coreProducts = await prisma.product.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: { seller: { include: { user: true } } },
+      });
+
+      const productIds = coreProducts.map(p => p.id);
+      const detailsList = await ProductDetails.find({ productId: { $in: productIds } });
+      const detailsMap = new Map(detailsList.map(d => [d.productId, d]));
+
+      return coreProducts.map(p => this._formatFullProduct(p, detailsMap.get(p.id)));
+    } catch (e) {
+      console.warn('[ProductService] recentlyAddedProduct notice:', e.message);
+      return [];
+    }
+  }
+
+  async getAllProducts(req = {}) {
+    const requestedCategory = req.category || '';
+    let dbProducts = [];
+    let totalElements = 0;
+
+    try {
+      const where = {};
+      if (req.minPrice) where.price = { ...(where.price || {}), gte: Number(req.minPrice) };
+      if (req.maxPrice) where.price = { ...(where.price || {}), lte: Number(req.maxPrice) };
+      if (req.stock) where.stockQuantity = { gte: Number(req.stock) };
+
+      let orderBy = { createdAt: 'desc' };
+      if (req.sort === 'price_low') orderBy = { price: 'asc' };
+      else if (req.sort === 'price_high') orderBy = { price: 'desc' };
+
+      const pageSize = parseInt(req.pageSize) || 20;
+      const pageNumber = parseInt(req.pageNumber) || 0;
+
+      const [cores, count] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          include: { seller: { include: { user: true } } },
+          orderBy,
+          skip: pageNumber * pageSize,
+          take: pageSize,
+        }),
+        prisma.product.count({ where }),
+      ]);
+
+      const productIds = cores.map(p => p.id);
+      const detailsList = await ProductDetails.find({ productId: { $in: productIds } });
+      const detailsMap = new Map(detailsList.map(d => [d.productId, d]));
+
+      dbProducts = cores.map(p => this._formatFullProduct(p, detailsMap.get(p.id)));
+      totalElements = count;
+    } catch (dbErr) {
+      console.warn('[ProductService] getAllProducts DB notice:', dbErr.message);
+    }
+
+    // Combine with samples
+    let samples = this._getSampleProducts(requestedCategory);
+
+    if (req.color) {
+      samples = samples.filter(p => (p.color || '').toLowerCase() === req.color.toLowerCase());
+      dbProducts = dbProducts.filter(p => (p.color || '').toLowerCase() === req.color.toLowerCase());
+    }
+    if (req.minPrice) {
+      samples = samples.filter(p => p.sellingPrice >= req.minPrice);
+    }
+    if (req.maxPrice) {
+      samples = samples.filter(p => p.sellingPrice <= req.maxPrice);
+    }
+
+    // Merge and deduplicate
+    const combined = [];
+    const seen = new Set();
+    [...dbProducts, ...samples].forEach(item => {
+      const id = String(item.id || item._id);
+      if (!seen.has(id)) {
+        seen.add(id);
+        combined.push(item);
+      }
+    });
+
+    const pageSize = parseInt(req.pageSize) || 20;
+    const pageNumber = parseInt(req.pageNumber) || 0;
+    const paginated = combined.slice(pageNumber * pageSize, (pageNumber + 1) * pageSize);
+
+    return {
+      content: paginated,
+      totalPages: Math.ceil(combined.length / pageSize) || 1,
+      totalElements: combined.length,
+    };
+  }
+
+  async searchProduct(query) {
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      return [];
+    }
+
+    const rawQuery = query.trim();
+    const cleanQuery = rawQuery.toLowerCase();
+    const queryTokens = cleanQuery
+      .split(/[\s,_\-+]+/)
+      .filter(t => t.length > 0 && !['a', 'an', 'the', 'in', 'on', 'of', 'for', 'with', 'and'].includes(t));
+
+    // 1. Search Postgres core
+    let dbMatches = [];
+    try {
+      const cores = await prisma.product.findMany({
+        where: {
+          OR: [
+            { name: { contains: cleanQuery, mode: 'insensitive' } },
+            { sku: { contains: cleanQuery, mode: 'insensitive' } },
+            ...queryTokens.map(tok => ({ name: { contains: tok, mode: 'insensitive' } })),
+          ],
+        },
+        include: { seller: { include: { user: true } } },
+      });
+
+      const productIds = cores.map(p => p.id);
+      const detailsList = await ProductDetails.find({ productId: { $in: productIds } });
+      const detailsMap = new Map(detailsList.map(d => [d.productId, d]));
+
+      dbMatches = cores.map(p => this._formatFullProduct(p, detailsMap.get(p.id)));
+    } catch (e) {
+      console.warn('[ProductService] searchProduct DB notice:', e.message);
+    }
+
+    // 2. Search local samples
+    const matchSampleProduct = (p) => {
+      const title = (p.title || '').toLowerCase();
+      const description = (p.description || '').toLowerCase();
+      const color = (p.color || '').toLowerCase();
+      const folder = (p.folder || '').toLowerCase();
+      const categories = Array.isArray(p.categories) ? p.categories.map(c => String(c).toLowerCase()) : [];
+      const sellerBusiness = (p.seller?.businessDetails?.businessName || '').toLowerCase();
+      const sellerName = (p.seller?.sellerName || '').toLowerCase();
+
+      const combined = `${title} ${description} ${color} ${folder} ${categories.join(' ')} ${sellerBusiness} ${sellerName}`;
+      if (combined.includes(cleanQuery)) return true;
+
+      if (queryTokens.length > 0) {
+        return queryTokens.every(token => combined.includes(token));
+      }
+      return false;
+    };
+
+    let sampleMatches = [];
+    try {
+      const samples = this._getAllCategoryProducts();
+      sampleMatches = samples.filter(matchSampleProduct);
+    } catch (e) {}
+
+    // Deduplicate
+    const seenIds = new Set();
+    const seenTitles = new Set();
+    const combinedResults = [];
+
+    [...dbMatches, ...sampleMatches].forEach(item => {
+      const id = String(item._id || item.id || '');
+      const title = (item.title || item.name || '').trim().toLowerCase();
+
+      if (id && seenIds.has(id)) return;
+      if (title && seenTitles.has(title)) return;
+
+      if (id) seenIds.add(id);
+      if (title) seenTitles.add(title);
+      combinedResults.push(item);
+    });
+
+    return combinedResults;
+  }
+
+  _filterProductsByCategory(products, categoryStr) {
+    const cat = (categoryStr || '').toLowerCase().trim();
+    if (!cat || cat === 'all') return products;
+
+    return products.filter(p => {
+      if (p.categories && Array.isArray(p.categories)) {
+        if (p.categories.some(c => c.toLowerCase() === cat || c.toLowerCase().includes(cat))) {
+          return true;
+        }
+      }
+      if (cat.includes('t_shirt') || cat.includes('tshirt')) return p.folder === 'men tshirt';
+      if (cat.includes('shirt') && !cat.includes('t_shirt') && !cat.includes('tshirt')) return p.folder === 'Men shirt';
+      if (cat === 'men' || cat === 'men_topwear') return p.folder === 'Men shirt' || p.folder === 'men tshirt';
+      if (cat.includes('mobile') || cat.includes('smartphone') || cat.includes('phone')) return p.folder === 'mobile';
+      if (cat.includes('watch')) return p.folder === 'watch';
+      if (cat === 'electronics') return p.folder === 'mobile' || p.folder === 'watch';
+      if (cat.includes('furniture') || cat.includes('decor')) return p.folder === 'furniture';
+      return (p.title || '').toLowerCase().includes(cat);
+    });
+  }
+
+  _getSampleProducts(categoryFilter) {
+    const all = this._getAllCategoryProducts();
+    if (!categoryFilter || categoryFilter === 'all') return all;
+    return this._filterProductsByCategory(all, categoryFilter);
   }
 
   _getAllCategoryProducts() {
     if (this._cachedCategoryProducts && this._cachedCategoryProducts.length > 0) {
       return this._cachedCategoryProducts;
     }
-    const fs = require('fs');
-    const path = require('path');
     const baseImagesDir = path.join(__dirname, '..', '..', '..', 'product images');
-
     const allProducts = [];
 
-    // Helper to safely list files
     const getFiles = (dir) => {
       try {
         if (!fs.existsSync(dir)) return [];
@@ -115,7 +532,7 @@ class ProductService {
       }
     };
 
-    // 1. Men Shirts ("Men shirt")
+    // 1. Men Shirts
     const shirtFiles = getFiles(path.join(baseImagesDir, 'Men shirt'));
     const shirtTitles = [
       "Louis Philippe Tailored Fit Formal Solid Shirt",
@@ -139,11 +556,12 @@ class ProductService {
         stock: 20,
         description: "Pure combed cotton shirt with tailored collar, breathable weave, and signature Louis Philippe detailing. Perfect for business meetings and evening gatherings.",
         seller: { businessDetails: { businessName: "Louis Philippe Official" } },
-        createdAt: new Date()
+        createdAt: new Date(),
+        toObject: function() { return { ...this }; },
       });
     });
 
-    // 2. Men T-Shirts ("men tshirt")
+    // 2. Men T-Shirts
     const tshirtFiles = getFiles(path.join(baseImagesDir, 'men tshirt'));
     const tshirtTitles = [
       "Urban Active Crew Neck Bio-Washed T-Shirt",
@@ -166,503 +584,13 @@ class ProductService {
         stock: 35,
         description: "100% premium pre-shrunk cotton t-shirt with reinforced crew neck and soft bio-wash finish for all-day comfort.",
         seller: { businessDetails: { businessName: "Urban Threads Co." } },
-        createdAt: new Date()
-      });
-    });
-
-    // 3. Home & Furniture ("furniture")
-    const furnitureFiles = getFiles(path.join(baseImagesDir, 'furniture'));
-    const runnerTitles = [
-      "Handwoven Bohemian Dining & Bed Runner",
-      "Artisan Geometric Jacquard Table Runner",
-      "Vintage Embroidered Velvet Accent Runner"
-    ];
-    furnitureFiles.forEach((file, i) => {
-      allProducts.push({
-        _id: `furniture_${i}`,
-        id: `furniture_${i}`,
-        title: runnerTitles[i] || `Artisan Home Runner ${i + 1}`,
-        sellingPrice: 799 + (i * 200),
-        mrpPrice: 1399 + (i * 200),
-        discountPercent: 43,
-        images: [`furniture/${file}`],
-        categories: ["home_furniture", "furniture", "bed_runners", "home_decor", "living_room"],
-        folder: "furniture",
-        color: "Multicolor",
-        sizes: ["FREE"],
-        stock: 15,
-        description: "Elegantly textured luxury runner crafted with premium woven fabric. Adds a warm, sophisticated aesthetic to dining tables and bed ends.",
-        seller: { businessDetails: { businessName: "Casa Décor Studio" } },
-        createdAt: new Date()
-      });
-    });
-
-    // 4. Mobile Phones ("mobile")
-    const mobileFiles = getFiles(path.join(baseImagesDir, 'mobile'));
-    const mobileTitles = [
-      "NextGen Galaxy Ultra 5G (Phantom Black, 256GB)",
-      "Pro Max 5G AMOLED Flagship (Starlight, 128GB)",
-      "Edge Dynamic 5G Curved Screen (8GB RAM, 128GB)",
-      "Sonic Speed 5G Gaming Smartphone (12GB RAM)",
-      "Starlight Slim 5G Quad Camera Smartphone",
-      "Apex Prime 5G 120Hz Ultra Smooth Phone",
-      "Nova Z 5G AI Dual Camera High-Capacity Phone",
-      "Infinity Pro 5G Gorilla Glass Smartphone",
-      "Horizon 5G Super Retina Display (256GB)",
-      "Cyber Neo 5G High-Performance Phone"
-    ];
-    mobileFiles.forEach((file, i) => {
-      allProducts.push({
-        _id: `mobile_${i}`,
-        id: `mobile_${i}`,
-        title: mobileTitles[i] || `Flagship 5G Smartphone ${i + 1}`,
-        sellingPrice: 16999 + (i * 2500),
-        mrpPrice: 24999 + (i * 2500),
-        discountPercent: 32,
-        images: [`mobile/${file}`],
-        categories: ["electronics", "mobiles", "smartphones", "gadgets", "accessories"],
-        folder: "mobile",
-        color: i % 2 === 0 ? "Black" : "Blue",
-        sizes: ["128GB", "256GB"],
-        stock: 12,
-        description: "Powered by an octa-core 5G processor, vibrant 120Hz AMOLED screen, multi-lens AI camera array, and 5000mAh battery with fast charging.",
-        seller: { businessDetails: { businessName: "TechHub Mobiles" } },
-        createdAt: new Date()
-      });
-    });
-
-    // 5. Smart Watches & Watches ("watch" & subdirs)
-    const watchDir = path.join(baseImagesDir, 'watch');
-    const watchRootFiles = getFiles(watchDir);
-    const watchSubdirs = ['boalt', 'watch 2', 'watch 3', 'watch 4'];
-    const watchFiles = [...watchRootFiles.map(f => `watch/${f}`)];
-    watchSubdirs.forEach(sd => {
-      const sFiles = getFiles(path.join(watchDir, sd));
-      sFiles.forEach(sf => watchFiles.push(`watch/${sd}/${sf}`));
-    });
-
-    const watchTitles = [
-      "Titan Smart Touch Bluetooth Calling Watch",
-      "Titan Edge Classic Sapphire Chronograph",
-      "Titan Active Fitness Sport Smartwatch",
-      "Cellecor Pro Ray AMOLED Display Smartwatch",
-      "Cellecor Active Heart Rate & SpO2 Tracker",
-      "Cellecor Rugged Outdoor GPS Smartwatch",
-      "BoAt Wave Voice HD Bluetooth Smartwatch",
-      "BoAt Flash Touch Waterproof Fitness Watch",
-      "Aero Pulse Stainless Steel Smart Band",
-      "Kronos Precision Multi-Dial Luxury Watch"
-    ];
-
-    watchFiles.slice(0, 10).forEach((imgPath, i) => {
-      allProducts.push({
-        _id: `watch_${i}`,
-        id: `watch_${i}`,
-        title: watchTitles[i] || `Luxury Smart Watch ${i + 1}`,
-        sellingPrice: 2499 + (i * 600),
-        mrpPrice: 4999 + (i * 600),
-        discountPercent: 50,
-        images: [imgPath],
-        categories: ["electronics", "smart_watches", "watches", "men_watches", "women_watches", "gadgets"],
-        folder: "watch",
-        color: i % 2 === 0 ? "Black" : "Silver",
-        sizes: ["FREE"],
-        stock: 25,
-        description: "HD color touchscreen with Bluetooth calling, 100+ sports modes, 24/7 health tracking, sleep monitor, and up to 7-day battery life.",
-        seller: { businessDetails: { businessName: "Chronos Timepiece & Co." } },
-        createdAt: new Date()
-      });
-    });
-
-    // 6. Shop For Wedding ("shop for wedding")
-    const weddingFiles = getFiles(path.join(baseImagesDir, 'shop for wedding'));
-    const weddingTitles = [
-      "House of Pataudi Handcrafted Embellished Wedges",
-      "Royal Heritage Zari Embroidered Wedding Dupatta",
-      "House of Pataudi Men Tan Leather Formal Wedding Loafers",
-      "Handcrafted Zari Bridal Embroidered Lehenga Choli",
-      "Festive Gold Zari Velvet Sherwani Stole",
-      "Regal Traditional Heritage Bridal Ensemble"
-    ];
-    weddingFiles.forEach((file, i) => {
-      const isMenLoafer = file.toLowerCase().includes('men') || file.toLowerCase().includes('loafers');
-      const cats = isMenLoafer
-        ? ["shop_for_wedding", "wedding", "men_footwear", "men", "footwear"]
-        : ["shop_for_wedding", "wedding", "women_indian_and_fusion_wear", "women_lehenga_cholis", "women"];
-
-      allProducts.push({
-        _id: `wedding_${i}`,
-        id: `wedding_${i}`,
-        title: weddingTitles[i] || `Royal Wedding Collection ${i + 1}`,
-        sellingPrice: 2499 + (i * 800),
-        mrpPrice: 4999 + (i * 800),
-        discountPercent: 50,
-        images: [`shop for wedding/${file}`],
-        categories: cats,
-        folder: "shop for wedding",
-        color: isMenLoafer ? "Tan" : "Maroon",
-        sizes: isMenLoafer ? ["8", "9", "10"] : ["FREE"],
-        stock: 10,
-        description: "Bespoke festive craftsmanship featuring intricate zari work, rich textiles, and regal detailing suited for traditional weddings and celebrations.",
-        seller: { businessDetails: { businessName: "Royal Heritage Wedding" } },
-        createdAt: new Date()
-      });
-    });
-
-    // 7. Sarees ("products")
-    const sareeFiles = getFiles(path.join(baseImagesDir, 'products'));
-    sareeFiles.slice(0, 30).forEach((file, i) => {
-      const rawName = file.replace(/\.[^.]+$/, '').replace(/^[a-f0-9-]{36}/i, '');
-      const cleanTitle = (rawName.replace(/[-_]/g, ' ').trim() || `Designer Saree Collection ${i + 1}`)
-        .replace(/\b\w/g, c => c.toUpperCase());
-
-      allProducts.push({
-        _id: `saree_${i}`,
-        id: `saree_${i}`,
-        title: cleanTitle,
-        sellingPrice: 899 + (i * 120),
-        mrpPrice: Math.round((899 + (i * 120)) * 1.45),
-        discountPercent: 31,
-        images: [`products/${file}`],
-        categories: ["women", "women_indian_and_fusion_wear", "sarees", "ethnic_wear"],
-        folder: "products",
-        color: i % 4 === 0 ? 'Blue' : i % 4 === 1 ? 'Red' : i % 4 === 2 ? 'Green' : 'Gold',
-        sizes: ['FREE'],
-        stock: 25,
-        description: "Exquisite traditional handloom saree crafted with lustrous zari borders and detailed pallu. Includes matching unstitched blouse piece.",
-        seller: { businessDetails: { businessName: "Heritage Ethnic Studio" } },
-        createdAt: new Date()
+        createdAt: new Date(),
+        toObject: function() { return { ...this }; },
       });
     });
 
     this._cachedCategoryProducts = allProducts;
     return allProducts;
-  }
-
-  _filterProductsByCategory(products, category) {
-    if (!category || category === 'all') return products;
-    const cat = category.toLowerCase().trim();
-
-    return products.filter(p => {
-      // Direct category tag match
-      if (p.categories && p.categories.some(c => c.toLowerCase() === cat)) return true;
-
-      // Subcategory & keyword rules
-      if (cat.includes('t_shirt') || cat.includes('tshirt')) {
-        return p.folder === 'men tshirt';
-      }
-      if (cat.includes('shirt') && !cat.includes('t_shirt') && !cat.includes('tshirt')) {
-        return p.folder === 'Men shirt';
-      }
-      if (cat === 'men' || cat === 'men_topwear') {
-        return p.folder === 'Men shirt' || p.folder === 'men tshirt' || (p.folder === 'shop for wedding' && p.categories.includes('men'));
-      }
-      if (cat.includes('mobile') || cat.includes('smartphone') || cat.includes('cellphone') || cat === 'phone' || cat === 'phones') {
-        return p.folder === 'mobile';
-      }
-      if (cat.includes('smart_watch') || cat === 'watch' || cat === 'watches' || cat.includes('wrist_watch')) {
-        return p.folder === 'watch';
-      }
-      if (cat === 'electronics' || cat === 'gadgets') {
-        return p.folder === 'mobile' || p.folder === 'watch';
-      }
-      if (cat.includes('furniture') || cat.includes('runner') || cat.includes('decor') || cat === 'home_furniture') {
-        return p.folder === 'furniture';
-      }
-      if (cat.includes('wedding') || cat === 'shop_for_wedding') {
-        return p.folder === 'shop for wedding';
-      }
-      if (cat === 'women' || cat.includes('saree') || cat.includes('ethnic') || cat.includes('fusion') || cat.includes('lehenga')) {
-        return p.folder === 'products' || (p.folder === 'shop for wedding' && p.categories.includes('women'));
-      }
-
-      // Fallback: title search
-      return p.title.toLowerCase().includes(cat);
-    });
-  }
-
-  _getSampleProducts(categoryFilter) {
-    const all = this._getAllCategoryProducts();
-    if (!categoryFilter || categoryFilter === 'all') {
-      return all;
-    }
-    return this._filterProductsByCategory(all, categoryFilter);
-  }
-
-  async findProductById(productId) {
-    const samples = this._getAllCategoryProducts();
-    const match = samples.find(p => p._id === productId || p.id === productId);
-    if (match) return match;
-
-    try {
-      if (!this._dbConnected()) {
-        throw new ProductError('Product not found');
-      }
-      if (!mongoose.Types.ObjectId.isValid(productId)) {
-        throw new ProductError("Invalid product ID...");
-      }
-      const product = await Product.findById(productId).populate("seller");
-      if (!product) throw new ProductError("Product not found");
-      return product;
-    } catch (error) {
-      if (match) return match;
-      throw new ProductError(error.message);
-    }
-  }
-
-  async searchProduct(query) {
-    if (!query || typeof query !== 'string' || !query.trim()) {
-      return [];
-    }
-
-    const rawQuery = query.trim();
-    const cleanQuery = rawQuery.toLowerCase();
-    const queryTokens = cleanQuery
-      .split(/[\s,_\-+]+/)
-      .filter(t => t.length > 0 && !['a', 'an', 'the', 'in', 'on', 'of', 'for', 'with', 'and'].includes(t));
-
-    // Helper matcher for in-memory / sample products
-    const matchSampleProduct = (p) => {
-      const title = (p.title || '').toLowerCase();
-      const description = (p.description || '').toLowerCase();
-      const color = (p.color || '').toLowerCase();
-      const folder = (p.folder || '').toLowerCase();
-      const categories = Array.isArray(p.categories) ? p.categories.map(c => String(c).toLowerCase()) : [];
-      const sellerBusiness = (p.seller?.businessDetails?.businessName || '').toLowerCase();
-      const sellerName = (p.seller?.sellerName || '').toLowerCase();
-
-      // Combined searchable text corpus
-      const combined = `${title} ${description} ${color} ${folder} ${categories.join(' ')} ${sellerBusiness} ${sellerName}`;
-
-      // 1. Direct full query phrase match
-      if (combined.includes(cleanQuery)) {
-        return true;
-      }
-
-      // 2. Token / word matching
-      if (queryTokens.length > 0) {
-        const allTokensMatch = queryTokens.every(token => {
-          if (combined.includes(token)) return true;
-          // Handle plural / singular stems
-          if (token.endsWith('es') && combined.includes(token.slice(0, -2))) return true;
-          if (token.endsWith('s') && combined.includes(token.slice(0, -1))) return true;
-          if (combined.includes(token + 's') || combined.includes(token + 'es')) return true;
-          return false;
-        });
-
-        if (allTokensMatch) return true;
-
-        if (queryTokens.length >= 2) {
-          const matchedCount = queryTokens.filter(token => {
-            if (combined.includes(token)) return true;
-            if (token.endsWith('es') && combined.includes(token.slice(0, -2))) return true;
-            if (token.endsWith('s') && combined.includes(token.slice(0, -1))) return true;
-            return false;
-          }).length;
-          if (matchedCount / queryTokens.length >= 0.6) return true;
-        }
-      }
-
-      return false;
-    };
-
-    let sampleMatches = [];
-    try {
-      const samples = this._getAllCategoryProducts();
-      sampleMatches = samples.filter(matchSampleProduct);
-    } catch (sampleErr) {
-      console.warn("Error filtering sample products:", sampleErr.message);
-    }
-
-    let dbMatches = [];
-    if (this._dbConnected()) {
-      try {
-        const Seller = require("../models/Seller");
-        const Category = require("../models/Category");
-
-        const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tokenRegexes = queryTokens.map(t => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-
-        // Find matching categories
-        const matchingCategories = await Category.find({
-          $or: [
-            { name: new RegExp(escaped, 'i') },
-            { categoryId: new RegExp(escaped, 'i') },
-            ...tokenRegexes.map(r => ({ name: r })),
-            ...tokenRegexes.map(r => ({ categoryId: r }))
-          ]
-        }).select('_id');
-        const categoryIds = matchingCategories.map(c => c._id);
-
-        // Find matching sellers
-        const matchingSellers = await Seller.find({
-          $or: [
-            { sellerName: new RegExp(escaped, 'i') },
-            { "businessDetails.businessName": new RegExp(escaped, 'i') },
-            ...tokenRegexes.map(r => ({ sellerName: r })),
-            ...tokenRegexes.map(r => ({ "businessDetails.businessName": r }))
-          ]
-        }).select('_id');
-        const sellerIds = matchingSellers.map(s => s._id);
-
-        const orConditions = [
-          { title: new RegExp(escaped, 'i') },
-          { description: new RegExp(escaped, 'i') },
-          { color: new RegExp(escaped, 'i') }
-        ];
-
-        if (categoryIds.length > 0) {
-          orConditions.push({ category: { $in: categoryIds } });
-        }
-        if (sellerIds.length > 0) {
-          orConditions.push({ seller: { $in: sellerIds } });
-        }
-
-        tokenRegexes.forEach(r => {
-          orConditions.push({ title: r });
-          orConditions.push({ description: r });
-        });
-
-        dbMatches = await Product.find({ $or: orConditions })
-          .populate("seller")
-          .populate("category");
-      } catch (dbErr) {
-        console.warn("Error querying MongoDB for search:", dbErr.message);
-      }
-    }
-
-    // Merge and deduplicate
-    const seenIds = new Set();
-    const seenTitles = new Set();
-    const combinedResults = [];
-
-    [...dbMatches, ...sampleMatches].forEach(item => {
-      const id = String(item._id || item.id || '');
-      const title = (item.title || '').trim().toLowerCase();
-
-      if (id && seenIds.has(id)) return;
-      if (title && seenTitles.has(title)) return;
-
-      if (id) seenIds.add(id);
-      if (title) seenTitles.add(title);
-      combinedResults.push(item);
-    });
-
-    return combinedResults;
-  }
-
-  async getAllProducts(req) {
-    const requestedCategory = req.category || '';
-
-    if (this._dbConnected()) {
-      try {
-        const filterQuery = {};
-        if (requestedCategory && requestedCategory !== 'all') {
-          const category = await Category.findOne({ categoryId: requestedCategory });
-          if (category) {
-            const categoryIds = [category._id];
-            let parentIds = [category._id];
-            while (parentIds.length > 0) {
-              const children = await Category.find({ parentCategory: { $in: parentIds } }).select('_id');
-              parentIds = children.map((child) => child._id);
-              categoryIds.push(...parentIds);
-            }
-            filterQuery.category = { $in: categoryIds };
-          } else {
-            // Category not registered in DB collection - ensure DB query matches 0 products
-            filterQuery.category = new mongoose.Types.ObjectId();
-          }
-        }
-
-        if (req.color) filterQuery.color = req.color;
-        if (req.size) filterQuery.size = req.size;
-        if (req.minPrice) filterQuery.sellingPrice = { $gte: req.minPrice };
-        if (req.maxPrice) filterQuery.sellingPrice = { ...filterQuery.sellingPrice, $lte: req.maxPrice };
-        if (req.minDiscount) filterQuery.discountPercent = { $gte: req.minDiscount };
-        if (req.stock) filterQuery.stock = req.stock;
-
-        let sortQuery = {};
-        if (req.sort === "price_low") sortQuery.sellingPrice = 1;
-        else if (req.sort === "price_high") sortQuery.sellingPrice = -1;
-
-        const products = await Product.find(filterQuery)
-          .sort(sortQuery)
-          .skip((req.pageNumber || 0) * 10)
-          .limit(10);
-
-        const totalElements = await Product.countDocuments(filterQuery);
-        const pageSize = parseInt(req.pageSize) || 10;
-        const totalPages = Math.ceil(totalElements / pageSize);
-
-        if (products.length > 0) {
-          return { content: products, totalPages, totalElements };
-        }
-      } catch (dbErr) {
-        console.warn("DB query error in getAllProducts, using category mock:", dbErr.message);
-      }
-    }
-
-    // Category-Aware Products from local images
-    let samples = this._getSampleProducts(requestedCategory);
-
-    // If a specific category was requested and has 0 products available, return empty immediately
-    if (requestedCategory && requestedCategory !== 'all' && samples.length === 0) {
-      return {
-        content: [],
-        totalPages: 0,
-        totalElements: 0,
-      };
-    }
-
-    // Apply color filter
-    if (req.color) {
-      samples = samples.filter(p => (p.color || '').toLowerCase() === req.color.toLowerCase());
-    }
-    // Apply price filter
-    if (req.minPrice) {
-      samples = samples.filter(p => p.sellingPrice >= req.minPrice);
-    }
-    if (req.maxPrice) {
-      samples = samples.filter(p => p.sellingPrice <= req.maxPrice);
-    }
-    // Apply discount filter
-    if (req.minDiscount) {
-      samples = samples.filter(p => (p.discountPercent || 0) >= req.minDiscount);
-    }
-    // Apply sort
-    if (req.sort === 'price_low') {
-      samples.sort((a, b) => a.sellingPrice - b.sellingPrice);
-    } else if (req.sort === 'price_high') {
-      samples.sort((a, b) => b.sellingPrice - a.sellingPrice);
-    }
-
-    if (samples.length === 0) {
-      return {
-        content: [],
-        totalPages: 0,
-        totalElements: 0,
-      };
-    }
-
-    const pageSize = parseInt(req.pageSize) || 20;
-    const pageNumber = parseInt(req.pageNumber) || 0;
-    const paginated = samples.slice(pageNumber * pageSize, (pageNumber + 1) * pageSize);
-
-    return {
-      content: paginated,
-      totalPages: Math.ceil(samples.length / pageSize) || 1,
-      totalElements: samples.length,
-    };
-  }
-
-  async recentlyAddedProduct() {
-    if (!this._dbConnected()) return [];
-    return await Product.find().sort({ createdAt: -1 }).limit(10);
-  }
-
-  async getProductBySellerId(sellerId) {
-    if (!this._dbConnected()) return [];
-    return await Product.find({ seller: sellerId });
   }
 }
 

@@ -15,13 +15,11 @@ const reviewSchema = new mongoose.Schema({
         default: []
     },
     product: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Product',  
+        type: mongoose.Schema.Types.Mixed,
         required: true
     },
     user: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',  
+        type: mongoose.Schema.Types.Mixed,
         required: true
     },
     createdAt: {
@@ -32,6 +30,9 @@ const reviewSchema = new mongoose.Schema({
     timestamps: true  
 });
 
-// Create and export the Review model
+// Indices for querying reviews by product or user
+reviewSchema.index({ product: 1 });
+reviewSchema.index({ user: 1 });
+
 const Review = mongoose.model('Review', reviewSchema);
 module.exports = Review;

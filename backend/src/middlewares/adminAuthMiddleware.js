@@ -1,5 +1,5 @@
 const jwtProvider = require("../utils/jwtProvider");
-const User = require("../models/User");
+const UserService = require("../services/UserService");
 const UserRoles = require("../domain/UserRole");
 
 const adminAuthMiddleware = async (req, res, next) => {
@@ -27,22 +27,10 @@ const adminAuthMiddleware = async (req, res, next) => {
       return res.status(403).json({ message: "Access denied: Administrator privileges required" });
     }
 
-    const mongoose = require("mongoose");
-    const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-
-    if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-      req.admin = {
-        _id: "offline_admin",
-        email: payload.email,
-        fullName: "Master Administrator",
-        role: "ROLE_ADMIN",
-      };
-      req.user = req.admin;
-      return next();
-    }
-
-    const admin = await User.findOne({ email: payload.email.toLowerCase().trim() });
-    if (!admin) {
+    let admin;
+    try {
+      admin = await UserService.findUserByEmail(payload.email);
+    } catch (err) {
       return res.status(404).json({ message: "Admin account not found" });
     }
 

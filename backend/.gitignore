@@ -1,12 +1,64 @@
+﻿# =======================================================
+# Dependencies
+# =======================================================
 node_modules/
+*/node_modules/
+**/node_modules/
+
+# =======================================================
+# Environment Variables & Secrets (CRITICAL - NEVER COMMIT)
+# =======================================================
 .env
 .env.*
-!*.env.example
 *.env
-env
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
+!*.env.example
+
+# Credentials, Private Keys & Certificates
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*credentials*.json
+*serviceAccountKey*.json
+
+# =======================================================
+# Logs & Debug Output
+# =======================================================
 logs/
 *.log
 npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# =======================================================
+# Operating System & Editor Files
+# =======================================================
 .DS_Store
 Thumbs.db
+[Dd]esktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.sw?
+
+# =======================================================
+# Temporary, Cache & Scratch Files
+# =======================================================
+*.tmp
+*.temp
 .offline_cache.json
+.cache/
+coverage/
+
+# =======================================================
+# Alternate Package Manager Lockfiles
+# =======================================================
+pnpm-lock.yaml
+yarn.lock
+bun.lockb

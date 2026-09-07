@@ -38,6 +38,7 @@ const couponRouters=require("./routers/couponRoutes.js")
 const homeRouters=require("./routers/homeCategoryRoutes.js")
 const chatboatRouters=require("./routers/chatboatRoutes.js")
 const reviewRouters=require("./routers/reviewRouters.js")
+const notificationRouters=require("./routers/notificationRoutes.js")
 
 app.use('/auth', authRouters);
 app.use("/api/users",userRouters)
@@ -60,20 +61,34 @@ app.use("/api/coupons",couponRouters)
 app.use("/api/sellers/revenue",revenueRouters)
 
 app.use("/api/reviews",reviewRouters)
+app.use("/api/notifications",notificationRouters)
 
 // chatboat
 app.use("/chat",chatboatRouters)
 
+const prisma = require('./config/prisma');
+const { disconnectMongo } = require('./config/mongoose');
+
 const port = process.env.PORT || 8080;
 
 async function startServer() {
+  try {
+    await prisma.$connect();
+    console.log('[PostgreSQL] Connected successfully via Prisma.');
+  } catch (err) {
+    console.error('[PostgreSQL] Prisma connection error:', err.message);
+    if (process.env.ALLOW_OFFLINE !== 'true') {
+      process.exit(1);
+    }
+  }
+
   try {
     await connectDB();
   } catch (err) {
     if (process.env.ALLOW_OFFLINE === 'true') {
       console.warn('ALLOW_OFFLINE is true — starting server without DB connection (development only)');
     } else {
-      console.error('Failed to connect to DB:', err.message);
+      console.error('Failed to connect to Mongo DB:', err.message);
       process.exit(1);
     }
   }
@@ -89,7 +104,23 @@ async function startServer() {
     }
     console.error('Server error', err);
   });
+
+  const gracefulShutdown = async (signal) => {
+    console.log(`\nReceived ${signal}. Gracefully shutting down...`);
+    server.close(async () => {
+      try {
+        await prisma.$disconnect();
+        console.log('[PostgreSQL] Prisma disconnected.');
+        await disconnectMongo();
+      } catch (e) {
+        console.error('Error during shutdown:', e.message);
+      }
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
 
-startServer();
-// 
+startServer();

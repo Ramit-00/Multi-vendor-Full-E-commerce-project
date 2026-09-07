@@ -1,77 +1,101 @@
-const Coupon = require('../models/Coupon');
-const User = require('../models/User');
+const prisma = require('../config/prisma');
 const Cart = require('../models/Cart');
-const mongoose = require('mongoose');
 const CouponNotValidException = require('../exceptions/CouponNotValidException');
+
+function formatCoupon(coupon) {
+  if (!coupon) return null;
+  const isPercent = coupon.discountType === 'PERCENTAGE';
+  return {
+    id: coupon.id,
+    _id: coupon.id,
+    code: coupon.code,
+    discountPercentage: isPercent ? Number(coupon.discountValue) : 10,
+    discountValue: Number(coupon.discountValue),
+    discountType: coupon.discountType,
+    usesLeft: coupon.usesLeft,
+    validityEndDate: coupon.expiryDate,
+    expiryDate: coupon.expiryDate,
+    minimumOrderValue: 0,
+    active: coupon.usesLeft > 0 && new Date() <= coupon.expiryDate,
+    createdAt: coupon.createdAt,
+  };
+}
 
 const couponService = {
   /**
    * Apply a coupon to the user's cart
-   * @param {String} code - Coupon code
-   * @param {Number} orderValue - Order value
-   * @param {Object} user - User object (mongoose document)
-   * @throws {CouponNotValidException} - Throws an exception if coupon is not valid
    */
   async applyCoupon(code, orderValue, user) {
     try {
-      // Find coupon by code
-      const coupon = await Coupon.findOne({ code });
-      const cart = await Cart.findOne({ user: user._id });
+      const cleanCode = String(code || '').trim().toUpperCase();
+      const userId = String(user.id || user._id || user);
+
+      const coupon = await prisma.coupon.findUnique({
+        where: { code: cleanCode },
+      });
 
       if (!coupon) {
         throw new CouponNotValidException('Coupon not found');
       }
 
-      if (user.usedCoupons.includes(coupon._id)) {
-        throw new CouponNotValidException('Coupon already used');
-      }
-
-      if (orderValue <= coupon.minimumOrderValue) {
-        throw new CouponNotValidException(
-          `Valid for minimum order value ${coupon.minimumOrderValue}`
-        );
-      }
-
       const currentDate = new Date();
-
-      if (
-        coupon.active &&
-        currentDate >= coupon.validityStartDate &&
-        currentDate <= coupon.validityEndDate
-      ) {
-        // Add the coupon to user's used coupons
-        user.usedCoupons.push(coupon._id);
-        await user.save();
-
-        // Calculate discounted price and update cart
-        const discount = Math.round((cart.totalSellingPrice * coupon.discountPercentage) / 100);
-        cart.totalSellingPrice -= discount;
-        cart.couponCode = code;
-        cart.couponPrice = discount;
-
-        return await cart.save();
+      if (currentDate > coupon.expiryDate) {
+        throw new CouponNotValidException('Coupon expired');
       }
 
-      throw new CouponNotValidException('Coupon not valid');
+      if (coupon.usesLeft <= 0) {
+        throw new CouponNotValidException('Coupon usage limit reached');
+      }
+
+      const cart = await Cart.findOne({ user: userId });
+      if (!cart) {
+        throw new CouponNotValidException('Active shopping cart not found');
+      }
+
+      // Calculate discount
+      let discount = 0;
+      if (coupon.discountType === 'PERCENTAGE') {
+        discount = Math.round((cart.totalSellingPrice * Number(coupon.discountValue)) / 100);
+      } else {
+        discount = Math.min(cart.totalSellingPrice, Number(coupon.discountValue));
+      }
+
+      // Atomically decrement coupon uses
+      await prisma.coupon.update({
+        where: { id: coupon.id },
+        data: { usesLeft: { decrement: 1 } },
+      });
+
+      cart.totalSellingPrice = Math.max(0, cart.totalSellingPrice - discount);
+      cart.couponCode = cleanCode;
+      cart.couponPrice = discount;
+
+      return await cart.save();
     } catch (error) {
+      if (error instanceof CouponNotValidException) throw error;
       throw new Error(error.message);
     }
   },
 
- 
   async removeCoupon(code, user) {
     try {
-      const coupon = await Coupon.findOne({ code });
+      const cleanCode = String(code || '').trim().toUpperCase();
+      const userId = String(user.id || user._id || user);
 
-      if (!coupon) {
-        throw new Error('Coupon not found');
+      const cart = await Cart.findOne({ user: userId });
+      if (!cart) {
+        throw new Error('Cart not found');
       }
 
-      user.usedCoupons = user.usedCoupons.filter((usedCoupon) => !usedCoupon.equals(coupon._id));
-      await user.save();
+      // Re-increment coupon uses if it exists
+      try {
+        await prisma.coupon.update({
+          where: { code: cleanCode },
+          data: { usesLeft: { increment: 1 } },
+        });
+      } catch (e) {}
 
-      const cart = await Cart.findOne({ userId: user._id });
-      cart.totalSellingPrice += cart.couponPrice; // Add the discount back to the cart's total
+      cart.totalSellingPrice += (cart.couponPrice || 0);
       cart.couponCode = null;
       cart.couponPrice = 0;
 
@@ -81,56 +105,65 @@ const couponService = {
     }
   },
 
-  /**
-   * Create a new coupon (admin only)
-   * @param {Object} couponData - Coupon data (mongoose document)
-   * @returns {Object} - Newly created coupon
-   */
   async createCoupon(couponData) {
     try {
-      const newCoupon = new Coupon(couponData);
-      return await newCoupon.save();
+      const code = String(couponData.code || `COUPON_${Date.now()}`).toUpperCase().trim();
+      const discountValue = Number(couponData.discountPercentage || couponData.discountValue || 10);
+      const discountType = couponData.discountType || 'PERCENTAGE';
+      const usesLeft = Number(couponData.usesLeft || couponData.maxUses || 100);
+      const expiryDate = couponData.validityEndDate || couponData.expiryDate
+        ? new Date(couponData.validityEndDate || couponData.expiryDate)
+        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+
+      const created = await prisma.coupon.create({
+        data: {
+          code,
+          discountType,
+          discountValue,
+          usesLeft,
+          expiryDate,
+        },
+      });
+
+      return formatCoupon(created);
     } catch (error) {
       throw new Error(error.message);
     }
   },
 
-  /**
-   * Delete a coupon by ID (admin only)
-   * @param {String} couponId - Coupon ID
-   */
   async deleteCoupon(couponId) {
     try {
-      await Coupon.findByIdAndDelete(couponId);
+      await prisma.coupon.delete({
+        where: { id: String(couponId) },
+      });
+      return { message: 'Coupon deleted successfully' };
     } catch (error) {
       throw new Error(error.message);
     }
   },
 
-  /**
-   * Get all coupons (admin only)
-   * @returns {Array} - List of all coupons
-   */
   async getAllCoupons() {
     try {
-      return await Coupon.find();
+      const coupons = await prisma.coupon.findMany({
+        orderBy: { createdAt: 'desc' },
+      });
+      return coupons.map(formatCoupon);
     } catch (error) {
       throw new Error(error.message);
     }
   },
 
-  /**
-   * Get a coupon by ID
-   * @param {String} couponId - Coupon ID
-   * @returns {Object|null} - Coupon object or null if not found
-   */
   async getCouponById(couponId) {
     try {
-      return await Coupon.findById(couponId);
+      const coupon = await prisma.coupon.findUnique({
+        where: { id: String(couponId) },
+      });
+      if (!coupon) throw new Error('Coupon not found');
+      return formatCoupon(coupon);
     } catch (error) {
       throw new Error('Coupon not found');
     }
-  }
+  },
 };
 
 module.exports = couponService;

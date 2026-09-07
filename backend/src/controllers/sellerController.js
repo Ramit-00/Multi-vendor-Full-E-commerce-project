@@ -1,34 +1,15 @@
 const UserRoles = require("../domain/UserRole");
 const AccountStatus = require("../domain/AccountStatus");
 const SellerError = require("../exceptions/SellerError");
-const Seller = require("../models/Seller");
-const VerificationCode = require("../models/VerificationCode");
 const SellerService = require("../services/SellerService");
 const VerificationService = require("../services/VerificationService");
 const generateOTP = require("../utils/generateOtp");
 const jwtProvider = require("../utils/jwtProvider");
 const { sendVerificationEmail } = require("../utils/sendEmail");
 const bcrypt = require("bcrypt");
-const mongoose = require("mongoose");
 
 // Set to remember verified emails in-memory for the registration session
 const verifiedEmails = new Set();
-
-function isDbConnected() {
-  return mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-}
-
-async function findSellerByEmail(email, selectPassword = false) {
-  const normalized = (email || '').toLowerCase().trim();
-  if (isDbConnected()) {
-    let q = Seller.findOne({ email: normalized });
-    if (selectPassword) q = q.select('+password');
-    return await q.exec();
-  } else {
-    const s = SellerService.fallbackSellers ? SellerService.fallbackSellers.get(normalized) : null;
-    return s || null;
-  }
-}
 
 class SellerController {
   async getSellerProfile(req, res) {

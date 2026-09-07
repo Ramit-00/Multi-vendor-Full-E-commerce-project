@@ -1,36 +1,47 @@
-// services/DataInitializationService.js
-const User = require('../models/User'); // Adjust the path if necessary
+const prisma = require('../config/prisma');
 const bcrypt = require('bcrypt');
 
 class DataInitializationService {
   async initializeAdminUser() {
-    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@ecom.com').toLowerCase().trim();
-    const adminPassword = process.env.ADMIN_PASSWORD || 'AdminSecurePassword!2024';
-    
+    const adminEmail = (process.env.ADMIN_EMAIL || '').toLowerCase().trim();
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminEmail || !adminPassword) {
+      console.log('[AdminInit] ADMIN_EMAIL or ADMIN_PASSWORD not configured; skipping automatic admin seeding.');
+      return;
+    }
+
     try {
       const hashedPassword = await bcrypt.hash(adminPassword, 10);
-      let adminUser = await User.findOne({ email: adminEmail });
+      
+      // Initialize/verify in PostgreSQL via Prisma
+      const existingPostgresAdmin = await prisma.user.findUnique({
+        where: { email: adminEmail }
+      });
 
-      if (!adminUser) {
-        adminUser = new User({
-          fullName: 'Master Administrator',
-          email: adminEmail,
-          password: hashedPassword,
-          role: 'ROLE_ADMIN',
-          accountType: 'ADMIN',
-          status: 'ACTIVE'
+      if (!existingPostgresAdmin) {
+        await prisma.user.create({
+          data: {
+            name: 'Master Administrator',
+            email: adminEmail,
+            passwordHash: hashedPassword,
+            role: 'ADMIN',
+          }
         });
-        await adminUser.save();
-        console.log(`[AdminInit] Master Admin initialized: ${adminEmail}`);
+        console.log(`[AdminInit] Master Admin initialized in PostgreSQL: ${adminEmail}`);
       } else {
-        // Ensure role, accountType, status and password hash are active and in sync
-        adminUser.role = 'ROLE_ADMIN';
-        adminUser.accountType = 'ADMIN';
-        adminUser.status = 'ACTIVE';
-        adminUser.password = hashedPassword;
-        await adminUser.save();
-        console.log(`[AdminInit] Master Admin verified & updated: ${adminEmail}`);
+        await prisma.user.update({
+          where: { email: adminEmail },
+          data: {
+            name: existingPostgresAdmin.name || 'Master Administrator',
+            passwordHash: hashedPassword,
+            role: 'ADMIN',
+          }
+        });
+        console.log(`[AdminInit] Master Admin verified & updated in PostgreSQL: ${adminEmail}`);
       }
+
+      // Admin user verified in PostgreSQL
     } catch (error) {
       console.error('[AdminInit] Error during admin initialization:', error.message);
     }

@@ -1,5 +1,4 @@
 const CartItem = require("../models/CartItem");
-const User = require("../models/User");
 const CartItemError = require("../exceptions/CartItemErrror");
 const UserError = require("../exceptions/UserError");
 

@@ -4,7 +4,6 @@ const UserService = require("../services/UserService");
 const OrderError = require("../exceptions/OrderError");
 const PaymentMethod = require("../domain/PaymentMethod");
 const PaymentService = require("../services/PaymentService");
-const PaymentOrder = require("../models/PaymentOrder");
 
 class OrderController {
   // Create a new order
@@ -25,8 +24,6 @@ class OrderController {
 
         const response = {};
 
-        console.log("rresponse ",response,paymentMethod,"--",PaymentMethod.RAZORPAY,"--",paymentMethod === PaymentMethod.RAZORPAY)
-
         if (paymentMethod === PaymentMethod.RAZORPAY) {
             const payment = await PaymentService.createRazorpayPaymentLink(user, paymentOrder.amount, paymentOrder._id);
             const paymentUrl = payment.short_url;
@@ -34,10 +31,7 @@ class OrderController {
 
             response.payment_link_url = paymentUrl;
 
-            paymentOrder.paymentLinkId = paymentUrlId;
-            await PaymentOrder.findByIdAndUpdate(paymentOrder._id,paymentOrder)
-            // await this.paymentOrderRepository.save(paymentOrder);
-            console.log('payment -- ',payment)
+            await PaymentService.setPaymentLinkId(paymentOrder._id, paymentUrlId);
 
         } else if (paymentMethod === PaymentMethod.STRIPE) {
             const paymentUrl = await PaymentService.createStripePaymentLink(user, paymentOrder.amount, paymentOrder._id);

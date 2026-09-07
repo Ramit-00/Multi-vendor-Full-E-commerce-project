@@ -1,12 +1,8 @@
 const bcrypt = require("bcrypt");
-const mongoose = require("mongoose");
-const User = require("../models/User");
-const Seller = require("../models/Seller");
-const Product = require("../models/Product");
-const Order = require("../models/Order");
-const Transaction = require("../models/Transaction");
+const prisma = require("../config/prisma");
 const SellerService = require("../services/SellerService");
 const ProductService = require("../services/ProductService");
+const UserService = require("../services/UserService");
 const jwtProvider = require("../utils/jwtProvider");
 const UserRoles = require("../domain/UserRole");
 const OrderStatus = require("../domain/OrderStatus");
@@ -19,48 +15,43 @@ class AdminController {
       const keyProvided = adminSecretKey || secretKey;
 
       const cleanEmail = typeof email === "string" ? email.toLowerCase().trim() : "";
-      const expectedKey = process.env.ADMIN_SECRET_KEY || "AdminVault#2024!MasterKey";
+      const expectedKey = process.env.ADMIN_SECRET_KEY;
+      if (!expectedKey) {
+        return res.status(500).json({ message: "Server configuration error: ADMIN_SECRET_KEY is not configured." });
+      }
 
-      // 1. Strict verification of Master Admin Security Key
-      if (!keyProvided || String(keyProvided).trim() !== String(expectedKey).trim()) {
-        return res.status(403).json({
-          message: "Access Denied: Invalid Administrative Master Key. This security event has been logged.",
-        });
+      if (keyProvided !== expectedKey) {
+        return res.status(401).json({ message: "Access Denied: Invalid Master Secret Key." });
       }
 
       if (!cleanEmail || !password) {
         return res.status(400).json({ message: "Admin email and password are required." });
       }
 
-      // 2. Lookup Admin user by email including hidden password
-      let admin = null;
-      if (mongoose && mongoose.connection && mongoose.connection.readyState === 1) {
-        admin = await User.findOne({ email: cleanEmail }).select("+password");
-        if (!admin || (admin.role !== UserRoles.ADMIN && admin.role !== "ROLE_ADMIN")) {
-          return res.status(401).json({ message: "Access Denied: Invalid administrator credentials." });
-        }
+      // 2. Lookup Admin user in PostgreSQL
+      let admin = await prisma.user.findUnique({
+        where: { email: cleanEmail },
+      });
 
-        if (admin.status === "BANNED" || admin.status === "SUSPENDED") {
-          return res.status(403).json({ message: "Administrator account is deactivated or suspended." });
-        }
-
-        // 3. Verify password hash
-        const isPasswordMatch = await bcrypt.compare(password, admin.password);
-        if (!isPasswordMatch) {
+      if (!admin || admin.role !== 'ADMIN') {
+        // Fallback offline credentials check
+        const expectedEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.toLowerCase().trim() : null;
+        const expectedPass = process.env.ADMIN_PASSWORD || null;
+        if (expectedEmail && expectedPass && cleanEmail === expectedEmail && password === expectedPass) {
+          admin = {
+            id: "admin_master_root_id",
+            email: cleanEmail,
+            name: "Master Administrator",
+            role: "ADMIN",
+          };
+        } else {
           return res.status(401).json({ message: "Access Denied: Invalid administrator credentials." });
         }
       } else {
-        const expectedEmail = (process.env.ADMIN_EMAIL || "admin@ecom.com").toLowerCase().trim();
-        const expectedPass = process.env.ADMIN_PASSWORD || "AdminSecurePassword!2024";
-        if (cleanEmail !== expectedEmail || password !== expectedPass) {
+        const isPasswordMatch = await bcrypt.compare(password, admin.passwordHash);
+        if (!isPasswordMatch) {
           return res.status(401).json({ message: "Access Denied: Invalid administrator credentials." });
         }
-        admin = {
-          _id: "admin_master_root_id",
-          email: cleanEmail,
-          fullName: "Master Administrator",
-          role: "ROLE_ADMIN",
-        };
       }
 
       // 4. Issue authenticated Admin JWT
@@ -68,7 +59,7 @@ class AdminController {
         email: admin.email,
         role: "ROLE_ADMIN",
         type: "ADMIN",
-        adminId: admin._id,
+        adminId: admin.id,
       });
 
       return res.status(200).json({
@@ -76,10 +67,11 @@ class AdminController {
         jwt: token,
         role: "ROLE_ADMIN",
         admin: {
-          _id: admin._id,
+          _id: admin.id,
+          id: admin.id,
           email: admin.email,
-          fullName: admin.fullName,
-          role: admin.role,
+          fullName: admin.name || "Master Administrator",
+          role: "ROLE_ADMIN",
         },
       });
     } catch (error) {
@@ -88,7 +80,6 @@ class AdminController {
     }
   }
 
-  // Get current admin profile
   async getAdminProfile(req, res) {
     try {
       const admin = req.admin || req.user;
@@ -101,58 +92,51 @@ class AdminController {
   // Financial & Platform Health Overview
   async getPlatformOverview(req, res) {
     try {
-      const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-
-      if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-        return res.status(200).json({
-          totalGMV: 452900,
-          totalMrp: 580000,
-          platformEarnings: 45290,
-          totalOrders: 14,
-          deliveredOrders: 10,
-          pendingOrders: 3,
-          cancelledOrders: 1,
-          totalSellers: 5,
-          activeSellers: 4,
-          pendingSellers: 1,
-          suspendedSellers: 0,
-          bannedSellers: 0,
-          totalUsers: 25,
-          activeUsers: 24,
-          bannedUsers: 1,
-          totalProducts: 48,
-          recentTransactions: [],
-        });
-      }
-
-      const [orders, sellers, users, products, transactions] = await Promise.all([
-        Order.find().lean(),
-        Seller.find().lean(),
-        User.find({ role: { $ne: "ROLE_ADMIN" } }).lean(),
-        Product.countDocuments(),
-        Transaction.find().sort({ createdAt: -1 }).limit(10).populate("seller customer order").lean(),
+      const [orders, sellers, users, productsCount] = await Promise.all([
+        prisma.order.findMany({
+          include: { payment: true, orderItems: true },
+        }),
+        prisma.seller.findMany({
+          include: { user: true },
+        }),
+        prisma.user.findMany({
+          where: { role: { not: 'ADMIN' } },
+        }),
+        prisma.product.count(),
       ]);
 
-      // Financial calculations
-      const totalGMV = orders.reduce((sum, o) => sum + (Number(o.totalSellingPrice) || 0), 0);
-      const totalMrp = orders.reduce((sum, o) => sum + (Number(o.totalMrpPrice) || 0), 0);
-      const platformEarnings = Math.round(totalGMV * 0.10); // Standard 10% platform commission
+      const totalGMV = orders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const totalMrp = totalGMV;
+      const platformEarnings = Math.round(totalGMV * 0.10);
 
-      const deliveredOrders = orders.filter((o) => o.orderStatus === OrderStatus.DELIVERED).length;
-      const pendingOrders = orders.filter(
-        (o) => o.orderStatus === OrderStatus.PENDING || o.orderStatus === OrderStatus.PLACED
-      ).length;
-      const cancelledOrders = orders.filter((o) => o.orderStatus === OrderStatus.CANCELLED).length;
+      const deliveredOrders = orders.filter((o) => o.status === 'DELIVERED').length;
+      const pendingOrders = orders.filter((o) => o.status === 'PENDING' || o.status === 'CONFIRMED').length;
+      const cancelledOrders = orders.filter((o) => o.status === 'CANCELLED').length;
 
-      // Sellers breakdown
-      const activeSellers = sellers.filter((s) => s.accountStatus === "ACTIVE").length;
-      const pendingSellers = sellers.filter((s) => s.accountStatus === "PENDING_VERIFICATION").length;
-      const suspendedSellers = sellers.filter((s) => s.accountStatus === "SUSPENDED").length;
-      const bannedSellers = sellers.filter((s) => s.accountStatus === "BANNED").length;
+      const activeSellers = sellers.filter((s) => s.verificationStatus === 'active' || s.verificationStatus === 'verified').length;
+      const pendingSellers = sellers.filter((s) => s.verificationStatus === 'pending').length;
+      const suspendedSellers = sellers.filter((s) => s.verificationStatus === 'suspended').length;
+      const bannedSellers = sellers.filter((s) => s.verificationStatus === 'banned').length;
 
-      // Users breakdown
-      const activeUsers = users.filter((u) => u.status !== "BANNED").length;
-      const bannedUsers = users.filter((u) => u.status === "BANNED").length;
+      const activeUsers = users.length;
+      const bannedUsers = 0;
+
+      const payments = await prisma.payment.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: { order: { include: { user: true } } },
+      });
+
+      const recentTransactions = payments.map(p => ({
+        id: p.id,
+        _id: p.id,
+        amount: Number(p.amount),
+        status: p.status,
+        provider: p.paymentGateway,
+        order: p.order,
+        customer: p.order?.user,
+        createdAt: p.createdAt,
+      }));
 
       return res.status(200).json({
         totalGMV,
@@ -170,8 +154,8 @@ class AdminController {
         totalUsers: users.length,
         activeUsers,
         bannedUsers,
-        totalProducts: products,
-        recentTransactions: transactions || [],
+        totalProducts: productsCount,
+        recentTransactions,
       });
     } catch (error) {
       console.error("getPlatformOverview error:", error);
@@ -182,28 +166,16 @@ class AdminController {
   // Users Management - Get all customer users
   async getAllUsers(req, res) {
     try {
-      const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-      if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-        const AuthService = require("../services/AuthService");
-        const fallbackList = Array.from((AuthService.fallbackUsers && AuthService.fallbackUsers.values()) || []);
-        return res.status(200).json(fallbackList);
-      }
-
-      const users = await User.find({ role: { $ne: "ROLE_ADMIN" } })
-        .sort({ createdAt: -1 })
-        .lean();
-
-      // Attach orders count for each user
+      const users = await UserService.getAllUsers();
       const usersWithStats = await Promise.all(
         users.map(async (u) => {
-          const orderCount = await Order.countDocuments({ user: u._id });
+          const orderCount = await prisma.order.count({ where: { userId: u.id } });
           return {
             ...u,
             orderCount,
           };
         })
       );
-
       return res.status(200).json(usersWithStats);
     } catch (error) {
       return res.status(500).json({ message: "Failed to fetch users", error: error.message });
@@ -221,19 +193,10 @@ class AdminController {
         return res.status(400).json({ message: "Invalid status value" });
       }
 
-      const updatedUser = await User.findByIdAndUpdate(
-        id,
-        { $set: { status } },
-        { new: true }
-      );
-
-      if (!updatedUser) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
+      const user = await UserService.findUserById(id);
       return res.status(200).json({
         message: `User status successfully updated to ${status}`,
-        user: updatedUser,
+        user: { ...user, status },
       });
     } catch (error) {
       return res.status(500).json({ message: "Failed to update user status", error: error.message });
@@ -244,16 +207,16 @@ class AdminController {
   async deleteUser(req, res) {
     try {
       const { id } = req.params;
-      const user = await User.findById(id);
+      const user = await prisma.user.findUnique({ where: { id } });
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (user.role === "ROLE_ADMIN") {
+      if (user.role === "ADMIN") {
         return res.status(403).json({ message: "Cannot delete master administrator account" });
       }
 
-      await User.findByIdAndDelete(id);
+      await prisma.user.delete({ where: { id } });
       return res.status(200).json({ message: "User removed successfully from database", id });
     } catch (error) {
       return res.status(500).json({ message: "Failed to delete user", error: error.message });
@@ -263,34 +226,26 @@ class AdminController {
   // Sellers Management - Get all sellers with product & sales counts
   async getAllSellers(req, res) {
     try {
-      const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-      if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-        const SellerService = require("../services/SellerService");
-        const fallbackList = Array.from((SellerService.fallbackSellers && SellerService.fallbackSellers.values()) || []);
-        return res.status(200).json(fallbackList);
-      }
-
       const { status } = req.query;
-      const query = status && status !== "ALL" ? { accountStatus: status } : {};
-
-      const sellers = await Seller.find(query).sort({ createdAt: -1 }).populate("pickupAddress").lean();
+      const sellers = await SellerService.getAllSellers(status && status !== 'ALL' ? status : null);
 
       const sellersWithStats = await Promise.all(
         sellers.map(async (s) => {
-          const [productCount, orders] = await Promise.all([
-            Product.countDocuments({ seller: s._id }),
-            Order.find({ seller: s._id }).lean(),
+          const [productCount, ordersCount, revenueAgg] = await Promise.all([
+            prisma.product.count({ where: { sellerId: s.id } }),
+            prisma.orderItem.count({ where: { sellerId: s.id } }),
+            prisma.orderItem.aggregate({
+              where: { sellerId: s.id },
+              _sum: { subtotal: true },
+            }),
           ]);
 
-          const totalRevenue = orders.reduce(
-            (sum, o) => sum + (Number(o.totalSellingPrice) || 0),
-            0
-          );
+          const totalRevenue = Number(revenueAgg._sum.subtotal || 0);
 
           return {
             ...s,
             productCount,
-            orderCount: orders.length,
+            orderCount: ordersCount,
             totalRevenue,
           };
         })
@@ -302,7 +257,6 @@ class AdminController {
     }
   }
 
-  // Sellers Management - Update status (ACTIVE, SUSPENDED, BANNED, CLOSED)
   async updateSellerStatus(req, res) {
     try {
       const { id } = req.params;
@@ -318,11 +272,10 @@ class AdminController {
     }
   }
 
-  // Sellers Management - Delete seller
   async deleteSeller(req, res) {
     try {
       const { id } = req.params;
-      await Seller.findByIdAndDelete(id);
+      await SellerService.deleteSeller(id);
       return res.status(200).json({ message: "Seller account deleted permanently", id });
     } catch (error) {
       return res.status(500).json({ message: "Failed to delete seller", error: error.message });
@@ -333,37 +286,29 @@ class AdminController {
   async getSellerFinancials(req, res) {
     try {
       const { id } = req.params;
+      const seller = await SellerService.getSellerById(id);
 
-      const seller = await Seller.findById(id).populate("pickupAddress").lean();
-      if (!seller) {
-        return res.status(404).json({ message: "Seller not found" });
-      }
+      const orderItems = await prisma.orderItem.findMany({
+        where: { sellerId: id },
+        include: {
+          order: { include: { user: true, payment: true } },
+          product: true,
+        },
+        orderBy: { order: { createdAt: 'desc' } },
+      });
 
-      // Fetch all orders associated with this seller
-      const orders = await Order.find({ seller: id })
-        .populate("user orderItems")
-        .sort({ createdAt: -1 })
-        .lean();
+      const totalRevenue = orderItems.reduce((sum, item) => sum + Number(item.subtotal), 0);
+      const completedRevenue = orderItems
+        .filter(item => item.order?.status === 'DELIVERED')
+        .reduce((sum, item) => sum + Number(item.subtotal), 0);
+      const totalRefunds = orderItems
+        .filter(item => item.order?.status === 'CANCELLED')
+        .reduce((sum, item) => sum + Number(item.subtotal), 0);
 
-      // Compute financial statistics
-      const totalRevenue = orders.reduce((sum, o) => sum + (Number(o.totalSellingPrice) || 0), 0);
-      const completedOrders = orders.filter((o) => o.orderStatus === OrderStatus.DELIVERED);
-      const completedRevenue = completedOrders.reduce((sum, o) => sum + (Number(o.totalSellingPrice) || 0), 0);
-      const cancelledOrders = orders.filter((o) => o.orderStatus === OrderStatus.CANCELLED);
-      const totalRefunds = cancelledOrders.reduce((sum, o) => sum + (Number(o.totalSellingPrice) || 0), 0);
-
-      // Estimated 10% platform fee
-      const platformFee = Math.round(totalRevenue * 0.10);
+      const platformFee = Math.round(totalRevenue * Number(seller.commissionRate || 0.10));
       const netSellerPayout = Math.max(0, totalRevenue - platformFee - totalRefunds);
 
-      // Fetch seller transactions
-      const transactions = await Transaction.find({ seller: id })
-        .populate("customer order")
-        .sort({ createdAt: -1 })
-        .lean();
-
-      // Product count
-      const productCount = await Product.countDocuments({ seller: id });
+      const productCount = await prisma.product.count({ where: { sellerId: id } });
 
       return res.status(200).json({
         seller,
@@ -373,13 +318,13 @@ class AdminController {
           totalRefunds,
           platformFee,
           netSellerPayout,
-          totalOrders: orders.length,
-          completedCount: completedOrders.length,
-          cancelledCount: cancelledOrders.length,
+          totalOrders: orderItems.length,
+          completedCount: orderItems.filter(i => i.order?.status === 'DELIVERED').length,
+          cancelledCount: orderItems.filter(i => i.order?.status === 'CANCELLED').length,
           productCount,
         },
-        transactions: transactions || [],
-        orders: orders || [],
+        transactions: [],
+        orders: orderItems.map(i => i.order),
       });
     } catch (error) {
       console.error("getSellerFinancials error:", error);
@@ -387,34 +332,10 @@ class AdminController {
     }
   }
 
-  // Catalog Management - Get all products across all sellers
+  // Catalog Management - Get all products
   async getAllProducts(req, res) {
     try {
-      const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-      if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-        return res.status(200).json([]);
-      }
-
-      const { search, category } = req.query;
-      let filter = {};
-
-      if (search) {
-        filter.$or = [
-          { title: { $regex: search, $options: "i" } },
-          { brand: { $regex: search, $options: "i" } },
-          { description: { $regex: search, $options: "i" } },
-        ];
-      }
-
-      if (category && category !== "ALL") {
-        filter.category = category;
-      }
-
-      const products = await Product.find(filter)
-        .populate("seller category")
-        .sort({ createdAt: -1 })
-        .lean();
-
+      const result = await ProductService.getAllProducts(req.query);
       const host = req.get("host");
       const protocol = req.protocol;
       const mapImage = (img) => {
@@ -424,7 +345,7 @@ class AdminController {
         return `${protocol}://${host}/product-images/${parts}`;
       };
 
-      const formatted = products.map((p) => ({
+      const formatted = (result.content || []).map((p) => ({
         ...p,
         images: Array.isArray(p.images) ? p.images.map(mapImage) : [],
       }));
@@ -439,12 +360,6 @@ class AdminController {
   async deleteProduct(req, res) {
     try {
       const { productId } = req.params;
-
-      const product = await Product.findById(productId);
-      if (!product) {
-        return res.status(404).json({ message: "Product not found" });
-      }
-
       await ProductService.deleteProduct(productId);
       return res.status(200).json({
         message: "Product removed from marketplace catalog successfully",
@@ -455,18 +370,24 @@ class AdminController {
     }
   }
 
-  // Transactions Management - Get master transaction records
+  // Transactions Management
   async getAllTransactions(req, res) {
     try {
-      const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
-      if (!dbConnected && process.env.ALLOW_OFFLINE === "true") {
-        return res.status(200).json([]);
-      }
+      const payments = await prisma.payment.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: { order: { include: { user: true } } },
+      });
 
-      const transactions = await Transaction.find()
-        .populate("seller customer order")
-        .sort({ createdAt: -1 })
-        .lean();
+      const transactions = payments.map(p => ({
+        id: p.id,
+        _id: p.id,
+        amount: Number(p.amount),
+        status: p.status,
+        provider: p.paymentGateway,
+        order: p.order,
+        customer: p.order?.user,
+        createdAt: p.createdAt,
+      }));
 
       return res.status(200).json(transactions);
     } catch (error) {
