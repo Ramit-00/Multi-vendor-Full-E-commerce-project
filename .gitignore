@@ -1,4 +1,4 @@
-﻿# =======================================================
+# =======================================================
 # Dependencies
 # =======================================================
 node_modules/
@@ -101,8 +101,9 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 scratch/
-.offline_cache.json
-backend/.offline_cache.json
+.offline*.json
+*.offline*.json
+backend/.offline*.json
 .cache/
 .vite/
 frontend/.vite/
