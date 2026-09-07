@@ -2,9 +2,9 @@ const mongoose = require('mongoose');
 
 const sellerReportSchema = new mongoose.Schema({
     seller: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Seller',  
-        required: true
+        type: mongoose.Schema.Types.Mixed,
+        required: true,
+        index: true
     },
     totalEarnings: {
         type: Number,
@@ -28,15 +28,15 @@ const sellerReportSchema = new mongoose.Schema({
     },
     totalOrders: {
         type: Number,
-        default: 0  // Default value for total orders
+        default: 0
     },
     canceledOrders: {
         type: Number,
-        default: 0  // Default value for canceled orders
+        default: 0
     },
     totalTransactions: {
         type: Number,
-        default: 0  // Default value for total transactions
+        default: 0
     }
 }, {
     timestamps: true  

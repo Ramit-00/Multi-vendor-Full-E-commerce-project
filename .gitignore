@@ -1,9 +1,11 @@
-# =======================================================
+﻿# =======================================================
 # Dependencies
 # =======================================================
 node_modules/
 */node_modules/
 **/node_modules/
+.pnp
+.pnp.js
 
 # =======================================================
 # Environment Variables & Secrets (CRITICAL - NEVER COMMIT)
@@ -21,6 +23,38 @@ backend/.env.*
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+
+# Credentials, Private Keys & Certificates
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+*id_rsa*
+*credentials*.json
+*serviceAccountKey*.json
+*client_secret*.json
+
+# =======================================================
+# Database Dumps, Backups & Migration Mapping Logs
+# =======================================================
+backups/
+*/backups/
+**/backups/
+*.dump
+*.tar.gz
+*.sql.gz
+*.bak
+scripts/migrate/*.json
+scripts/migrate/id-mapping.json
+scripts/migrate/migration-log.json
+
+# Local Databases
+*.sqlite
+*.sqlite3
+*.db
+*.rdb
 
 # =======================================================
 # Build & Distribution Artifacts
@@ -62,7 +96,7 @@ $RECYCLE.BIN/
 *.sw?
 
 # =======================================================
-# Temporary & Scratch Files
+# Temporary, Cache & Scratch Files
 # =======================================================
 *.tmp
 *.temp
@@ -73,4 +107,14 @@ backend/.offline_cache.json
 .vite/
 frontend/.vite/
 coverage/
+.nyc_output/
 .eslintcache
+temp/
+tmp/
+
+# =======================================================
+# Alternate Package Manager Lockfiles (Repo uses npm)
+# =======================================================
+pnpm-lock.yaml
+yarn.lock
+bun.lockb

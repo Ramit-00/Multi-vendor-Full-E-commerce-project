@@ -1,26 +1,22 @@
-const Order = require("../models/Order");
+const prisma = require("../config/prisma");
 
 class RevenueService {
-  // Helper function to get the start of a day
   getStartOfDay(date) {
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     return startOfDay;
   }
 
-  // Helper function to get the end of a day
   getEndOfDay(date) {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
     return endOfDay;
   }
 
-  // Helper function to format the date
   formatDate(date) {
-    return date.toISOString().split('T')[0]; // Format as "YYYY-MM-DD"
+    return date.toISOString().split('T')[0];
   }
 
-  // Get daily revenue data for the past X days
   async getDailyRevenueForChart(days, sellerId) {
     const revenueData = [];
     const currentDate = new Date();
@@ -32,23 +28,35 @@ class RevenueService {
       const startOfDay = this.getStartOfDay(date);
       const endOfDay = this.getEndOfDay(date);
 
-      const dailyRevenue = await Order.find({
-        seller: sellerId,
-        orderDate: { $gte: startOfDay, $lte: endOfDay },
-      }).then(orders =>
-        orders.reduce((total, order) => total + order.totalSellingPrice, 0)
-      );
+      try {
+        const items = await prisma.orderItem.findMany({
+          where: {
+            sellerId: String(sellerId),
+            order: {
+              createdAt: { gte: startOfDay, lte: endOfDay },
+              status: { not: 'CANCELLED' },
+            },
+          },
+          select: { subtotal: true },
+        });
 
-      revenueData.push({
-        revenue: dailyRevenue,
-        date: this.formatDate(date), // Format as string
-      });
+        const dailyRevenue = items.reduce((total, it) => total + Number(it.subtotal), 0);
+
+        revenueData.push({
+          revenue: dailyRevenue,
+          date: this.formatDate(date),
+        });
+      } catch (e) {
+        revenueData.push({
+          revenue: 0,
+          date: this.formatDate(date),
+        });
+      }
     }
 
     return revenueData;
   }
 
-  // Get monthly revenue data for the past X months
   async getMonthlyRevenueForChart(months, sellerId) {
     const revenueData = [];
     const currentDate = new Date();
@@ -60,23 +68,35 @@ class RevenueService {
       const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
       const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
 
-      const monthlyRevenue = await Order.find({
-        seller: sellerId,
-        orderDate: { $gte: startOfMonth, $lte: endOfMonth },
-      }).then(orders =>
-        orders.reduce((total, order) => total + order.totalSellingPrice, 0)
-      );
+      try {
+        const items = await prisma.orderItem.findMany({
+          where: {
+            sellerId: String(sellerId),
+            order: {
+              createdAt: { gte: startOfMonth, lte: endOfMonth },
+              status: { not: 'CANCELLED' },
+            },
+          },
+          select: { subtotal: true },
+        });
 
-      revenueData.push({
-        revenue: monthlyRevenue,
-        date: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, '0')}`, // Format as "YYYY-MM"
-      });
+        const monthlyRevenue = items.reduce((total, it) => total + Number(it.subtotal), 0);
+
+        revenueData.push({
+          revenue: monthlyRevenue,
+          date: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, '0')}`,
+        });
+      } catch (e) {
+        revenueData.push({
+          revenue: 0,
+          date: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, '0')}`,
+        });
+      }
     }
 
     return revenueData;
   }
 
-  // Get yearly revenue data for the past X years
   async getYearlyRevenueForChart(years, sellerId) {
     const revenueData = [];
     const currentDate = new Date();
@@ -88,23 +108,35 @@ class RevenueService {
       const startOfYear = new Date(date.getFullYear(), 0, 1);
       const endOfYear = new Date(date.getFullYear(), 11, 31, 23, 59, 59, 999);
 
-      const yearlyRevenue = await Order.find({
-        sellerId: sellerId,
-        orderDate: { $gte: startOfYear, $lte: endOfYear },
-      }).then(orders =>
-        orders.reduce((total, order) => total + order.totalSellingPrice, 0)
-      );
+      try {
+        const items = await prisma.orderItem.findMany({
+          where: {
+            sellerId: String(sellerId),
+            order: {
+              createdAt: { gte: startOfYear, lte: endOfYear },
+              status: { not: 'CANCELLED' },
+            },
+          },
+          select: { subtotal: true },
+        });
 
-      revenueData.push({
-        revenue: yearlyRevenue,
-        date: String(startOfYear.getFullYear()), // Format as "YYYY"
-      });
+        const yearlyRevenue = items.reduce((total, it) => total + Number(it.subtotal), 0);
+
+        revenueData.push({
+          revenue: yearlyRevenue,
+          date: String(startOfYear.getFullYear()),
+        });
+      } catch (e) {
+        revenueData.push({
+          revenue: 0,
+          date: String(startOfYear.getFullYear()),
+        });
+      }
     }
 
     return revenueData;
   }
 
-  // Get hourly revenue data for the current day
   async getHourlyRevenueForChart(sellerId) {
     const revenueData = [];
     const currentDate = new Date();
@@ -113,44 +145,37 @@ class RevenueService {
     for (let i = 0; i < 24; i++) {
       const startOfHour = new Date(startOfDay);
       startOfHour.setHours(i, 0, 0, 0);
+
       const endOfHour = new Date(startOfDay);
       endOfHour.setHours(i, 59, 59, 999);
 
-      
+      try {
+        const items = await prisma.orderItem.findMany({
+          where: {
+            sellerId: String(sellerId),
+            order: {
+              createdAt: { gte: startOfHour, lte: endOfHour },
+              status: { not: 'CANCELLED' },
+            },
+          },
+          select: { subtotal: true },
+        });
 
-      const hourlyRevenue = await Order.find({
-        seller: sellerId,
-        orderDate: { $gte: startOfHour, $lte: endOfHour },
-      })
-      .then(orders =>
-      {
-        return orders.reduce((total, order) => total + order.totalSellingPrice, 0)
+        const hourlyRevenue = items.reduce((total, it) => total + Number(it.subtotal), 0);
+
+        revenueData.push({
+          revenue: hourlyRevenue,
+          date: `${String(i).padStart(2, '0')}:00`,
+        });
+      } catch (e) {
+        revenueData.push({
+          revenue: 0,
+          date: `${String(i).padStart(2, '0')}:00`,
+        });
       }
-        
-      );
-
-    
-
-      revenueData.push({
-        revenue: hourlyRevenue,
-        date: `${String(i).padStart(2, '0')}:00`, // Format as "HH:00"
-      });
     }
 
     return revenueData;
-  }
-
-  // Get revenue chart data by type (daily, monthly, or hourly)
-  async getRevenueChartByType(type, sellerId) {
-    // console.log("type chart",type,sellerId)
-    if (type === 'monthly') {
-      return await this.getMonthlyRevenueForChart(12, sellerId);
-    } else if (type === 'daily') {
-      return await this.getDailyRevenueForChart(30, sellerId);
-    } else {
-        
-      return await this.getHourlyRevenueForChart(sellerId);
-    }
   }
 }
 

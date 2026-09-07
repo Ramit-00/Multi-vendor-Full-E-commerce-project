@@ -1,327 +1,465 @@
-const Order = require("../models/Order");
-const Cart = require("../models/Cart");
-const Address = require("../models/Address");
-const User = require("../models/User");
-const OrderItem = require("../models/OrderItem");
-const CartService = require("../services/CartService");
+const prisma = require("../config/prisma");
 const OrderError = require("../exceptions/OrderError");
 const OrderStatus = require("../domain/OrderStatus");
 const PaymentStatus = require("../domain/PaymentStatus");
-const mongoose = require("mongoose");
-const TransactionService = require("./TransactionService");
+
+function toPrismaOrderStatus(status) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'PLACED' || s === 'CONFIRMED') return 'CONFIRMED';
+  if (s === 'SHIPPED') return 'SHIPPED';
+  if (s === 'DELIVERED') return 'DELIVERED';
+  if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
+  return 'PENDING';
+}
+
+function formatOrderItem(item) {
+  if (!item) return null;
+  const prod = item.product || {};
+  return {
+    id: item.id,
+    _id: item.id,
+    orderId: item.orderId,
+    productId: item.productId,
+    sellerId: item.sellerId,
+    quantity: item.quantity,
+    size: 'FREE',
+    mrpPrice: Number(item.unitPrice),
+    sellingPrice: Number(item.unitPrice),
+    subtotal: Number(item.subtotal),
+    product: {
+      id: prod.id || item.productId,
+      _id: prod.id || item.productId,
+      title: prod.name || 'Product Item',
+      name: prod.name || 'Product Item',
+      sku: prod.sku || '',
+      price: Number(prod.price || item.unitPrice),
+      sellingPrice: Number(prod.price || item.unitPrice),
+      mrpPrice: Number(prod.price || item.unitPrice),
+      images: [],
+    },
+    toObject: function() { return { ...this }; },
+  };
+}
+
+function formatOrder(order) {
+  if (!order) return null;
+  const items = (order.orderItems || []).map(formatOrderItem);
+  const totalItemCount = items.reduce((sum, it) => sum + (it.quantity || 1), 0);
+  const totalAmountNum = Number(order.totalAmount || 0);
+
+  const user = order.user || {};
+  const addr = order.shippingAddress || {};
+
+  const firstSeller = (order.orderItems && order.orderItems[0]?.seller) || null;
+  const sellerObj = firstSeller ? {
+    id: firstSeller.id,
+    _id: firstSeller.id,
+    sellerName: firstSeller.storeName,
+    storeName: firstSeller.storeName,
+    businessDetails: { businessName: firstSeller.storeName },
+  } : {
+    id: 'default_seller',
+    _id: 'default_seller',
+    sellerName: 'Partner Seller',
+  };
+
+  const formattedAddr = addr.id ? {
+    id: addr.id,
+    _id: addr.id,
+    name: user.name || 'Customer',
+    address: addr.line1,
+    line1: addr.line1,
+    locality: addr.line2 || '',
+    line2: addr.line2 || '',
+    city: addr.city,
+    state: addr.state,
+    pinCode: addr.pincode,
+    pincode: addr.pincode,
+    mobile: user.phone || '9999999999',
+  } : {
+    name: user.name || 'Customer',
+    address: 'Main Street',
+    locality: 'Main',
+    city: 'City',
+    state: 'State',
+    pinCode: '000000',
+    mobile: user.phone || '9999999999',
+  };
+
+  return {
+    id: order.id,
+    _id: order.id,
+    userId: order.userId,
+    user: {
+      id: user.id || order.userId,
+      _id: user.id || order.userId,
+      name: user.name || 'Customer',
+      fullName: user.name || 'Customer',
+      email: user.email || '',
+      mobile: user.phone || '',
+    },
+    seller: sellerObj,
+    shippingAddress: formattedAddr,
+    totalSellingPrice: totalAmountNum,
+    totalMrpPrice: totalAmountNum,
+    totalAmount: totalAmountNum,
+    totalItem: totalItemCount,
+    orderDate: order.createdAt,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+    orderStatus: order.status,
+    status: order.status,
+    orderItems: items,
+    paymentDetails: {
+      status: order.payment?.status || 'PENDING',
+      paymentGateway: order.payment?.paymentGateway || 'PENDING',
+    },
+    toObject: function() { return { ...this }; },
+  };
+}
 
 class OrderService {
+  /**
+   * Phase 7: Atomic Transactional Checkout
+   * 1. Check stock >= requested quantity.
+   * 2. Decrement stock atomically (stockQuantity: { decrement: qty }).
+   * 3. Create Order row.
+   * 4. Create OrderItem rows.
+   * 5. Create Payment record.
+   * Rollback cleanly on error.
+   */
   async createOrder(user, shippingAddress, cart) {
-    console.log("shpping address: start", shippingAddress);
     try {
-      if (!shippingAddress) {
-        shippingAddress = {
-          name: user.fullName || (user.email ? user.email.split('@')[0] : "Customer"),
-          address: "Default Delivery Address",
-          locality: "Main",
-          city: "New Delhi",
-          state: "Delhi",
-          pinCode: "110001",
-          mobile: "9999999999"
-        };
+      const email = (user?.email || '').toLowerCase().trim();
+      let dbUser = await prisma.user.findUnique({
+        where: { email },
+        include: { addresses: true },
+      });
+
+      if (!dbUser && user?.id) {
+        dbUser = await prisma.user.findUnique({
+          where: { id: String(user.id) },
+          include: { addresses: true },
+        });
       }
 
-      shippingAddress.locality = shippingAddress.locality || shippingAddress.city || "Main";
-      let addressId = shippingAddress._id;
-      if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
-        try {
-          const createdAddr = await Address.create({
-            name: shippingAddress.name || "Customer",
-            locality: shippingAddress.locality || "Main",
-            address: shippingAddress.address || "Main Street",
-            city: shippingAddress.city || "City",
-            state: shippingAddress.state || "State",
-            pinCode: shippingAddress.pinCode || "110001",
-            mobile: shippingAddress.mobile || "9999999999"
-          });
-          addressId = createdAddr._id;
-        } catch (addrErr) {
-          addressId = new mongoose.Types.ObjectId();
-        }
+      if (!dbUser) {
+        throw new OrderError("User not found in system to complete checkout.");
       }
 
-      if (user && user._id) {
-        if (!Array.isArray(user.addresses)) user.addresses = [];
-        if (addressId && mongoose.Types.ObjectId.isValid(addressId) && !user.addresses.some(a => String(a._id || a) === String(addressId))) {
-          user.addresses.push(addressId);
-          try {
-            await User.findByIdAndUpdate(user._id, { addresses: user.addresses });
-          } catch (uErr) {}
-        }
+      // Resolve shipping address in Postgres
+      let addressId = null;
+      if (shippingAddress?.id && dbUser.addresses.some(a => a.id === shippingAddress.id)) {
+        addressId = shippingAddress.id;
+      } else if (shippingAddress?._id && dbUser.addresses.some(a => a.id === shippingAddress._id)) {
+        addressId = shippingAddress._id;
+      } else if (dbUser.addresses.length > 0) {
+        addressId = dbUser.addresses[0].id;
+      } else {
+        // Create new address for user
+        const createdAddr = await prisma.address.create({
+          data: {
+            userId: dbUser.id,
+            line1: shippingAddress?.address || shippingAddress?.line1 || 'Default Address',
+            line2: shippingAddress?.locality || shippingAddress?.line2 || '',
+            city: shippingAddress?.city || 'City',
+            state: shippingAddress?.state || 'State',
+            pincode: String(shippingAddress?.pinCode || shippingAddress?.pincode || '000000'),
+          },
+        });
+        addressId = createdAddr.id;
       }
 
       const cartItems = (cart && cart.cartItems && cart.cartItems.length > 0) ? cart.cartItems : [];
-
-      const itemsBySeller = cartItems.reduce((acc, item) => {
-        let sellerId = "seller_default";
-        if (item.product && item.product.seller) {
-          if (typeof item.product.seller === 'object') {
-            sellerId = String(item.product.seller._id || item.product.seller.id || "seller_default");
-          } else {
-            sellerId = String(item.product.seller);
-          }
-        }
-        acc[sellerId] = acc[sellerId] || [];
-        acc[sellerId].push(item);
-        return acc;
-      }, {});
-
-      const orders = [];
-
-      for (const [sellerId, sCartItems] of Object.entries(itemsBySeller)) {
-        const totalOrderPrice = sCartItems.reduce(
-          (sum, item) => sum + Number(item.sellingPrice || 0),
-          0
-        );
-        const totalItemCount = sCartItems.reduce(
-          (sum, item) => sum + Number(item.quantity || 1),
-          0
-        );
-
-        const newOrder = new Order({
-          user: user._id || user.id || "user_guest",
-          seller: sellerId,
-          totalMrpPrice: totalOrderPrice,
-          totalSellingPrice: totalOrderPrice,
-          totalItem: totalItemCount,
-          shippingAddress: addressId,
-          orderStatus: OrderStatus.PENDING,
-          paymentDetails: { status: PaymentStatus.PENDING },
-          orderItems: [],
-        });
-
-        const orderItems = await Promise.all(
-          sCartItems.map(async (cartItem) => {
-            const prodId = cartItem.product?._id || cartItem.product?.id || cartItem.product || "prod_default";
-            const orderItem = new OrderItem({
-              mrpPrice: cartItem.mrpPrice || cartItem.sellingPrice || 0,
-              product: prodId,
-              quantity: cartItem.quantity || 1,
-              size: cartItem.size || "FREE",
-              userId: user._id || user.id || "user_guest",
-              sellingPrice: cartItem.sellingPrice || 0,
-            });
-
-            try {
-              const savedOrderItem = await orderItem.save();
-              newOrder.orderItems.push(savedOrderItem._id);
-              return savedOrderItem;
-            } catch (itemSaveErr) {
-              const fallbackItem = { ...orderItem.toObject(), _id: `item_${Date.now()}` };
-              newOrder.orderItems.push(fallbackItem._id);
-              return fallbackItem;
-            }
-          })
-        );
-
-        let savedOrder;
-        try {
-          savedOrder = await newOrder.save();
-          try { TransactionService.createTransaction(savedOrder._id); } catch(tErr) {}
-        } catch (orderSaveErr) {
-          savedOrder = { ...newOrder.toObject(), _id: `order_${Date.now()}` };
-        }
-
-        orders.push(savedOrder);
+      if (cartItems.length === 0) {
+        throw new OrderError("Cart is empty. Cannot checkout.");
       }
 
-      return orders;
-    
-   } catch (error) {
-    console.log("orderr error ", error)
-    throw new Error(error.message)
-   }
+      // Default seller fallback if item has no resolved seller
+      const defaultSeller = await prisma.seller.findFirst();
+      if (!defaultSeller) {
+        throw new OrderError("No active seller found on the platform.");
+      }
+
+      // Resolve items and group by seller
+      const itemsBySeller = {};
+      for (const item of cartItems) {
+        const prodRef = item.product || {};
+        const prodIdOrSku = String(prodRef.id || prodRef._id || prodRef || '');
+
+        // Resolve product in Postgres
+        let coreProduct = await prisma.product.findFirst({
+          where: {
+            OR: [
+              { id: prodIdOrSku },
+              { sku: prodIdOrSku },
+              { name: prodRef.title || prodRef.name || '' },
+            ],
+          },
+        });
+
+        // If product was a seed string like 'men_shirt_0', check seed SKU
+        if (!coreProduct && prodIdOrSku.startsWith('men_shirt_')) {
+          coreProduct = await prisma.product.findFirst({ where: { sku: 'SEED-MEN-SHIRT-0' } });
+        } else if (!coreProduct && prodIdOrSku.startsWith('men_tshirt_')) {
+          coreProduct = await prisma.product.findFirst({ where: { sku: 'SEED-MEN-TSHIRT-1' } });
+        }
+
+        if (!coreProduct) {
+          throw new OrderError(`Product not found in inventory: ${prodRef.title || prodIdOrSku}`);
+        }
+
+        let sellerId = coreProduct.sellerId || defaultSeller.id;
+        if (prodRef.seller) {
+          const sId = typeof prodRef.seller === 'object'
+            ? String(prodRef.seller.id || prodRef.seller._id || '')
+            : String(prodRef.seller);
+          if (sId) {
+            const sellerCheck = await prisma.seller.findUnique({ where: { id: sId } });
+            if (sellerCheck) sellerId = sellerCheck.id;
+          }
+        }
+
+        itemsBySeller[sellerId] = itemsBySeller[sellerId] || [];
+        itemsBySeller[sellerId].push({
+          cartItem: item,
+          product: coreProduct,
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.sellingPrice) || Number(coreProduct.price),
+        });
+      }
+
+      const createdOrders = [];
+
+      // Execute each seller order in an atomic Prisma transaction
+      for (const [sellerId, sellerItems] of Object.entries(itemsBySeller)) {
+        const totalSellingPrice = sellerItems.reduce(
+          (sum, it) => sum + (it.unitPrice * it.quantity),
+          0
+        );
+
+        const orderId = await prisma.$transaction(async (tx) => {
+          // 1. Check stock and decrement atomically
+          for (const it of sellerItems) {
+            const currentStock = await tx.product.findUnique({
+              where: { id: it.product.id },
+              select: { id: true, stockQuantity: true, name: true },
+            });
+
+            if (!currentStock || currentStock.stockQuantity < it.quantity) {
+              throw new OrderError(
+                `Insufficient stock for "${currentStock?.name || it.product.name}". Available: ${currentStock?.stockQuantity || 0}, Requested: ${it.quantity}`
+              );
+            }
+
+            await tx.product.update({
+              where: { id: it.product.id },
+              data: {
+                stockQuantity: { decrement: it.quantity },
+                status: currentStock.stockQuantity - it.quantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK',
+              },
+            });
+          }
+
+          // 2. Create Order in PostgreSQL
+          const order = await tx.order.create({
+            data: {
+              userId: dbUser.id,
+              shippingAddressId: addressId,
+              totalAmount: totalSellingPrice,
+              status: 'PENDING',
+            },
+          });
+
+          // 3. Create OrderItems in PostgreSQL
+          for (const it of sellerItems) {
+            await tx.orderItem.create({
+              data: {
+                orderId: order.id,
+                productId: it.product.id,
+                sellerId: sellerId,
+                quantity: it.quantity,
+                unitPrice: it.unitPrice,
+                subtotal: it.unitPrice * it.quantity,
+              },
+            });
+          }
+
+          // 4. Create Payment record in PostgreSQL
+          await tx.payment.create({
+            data: {
+              orderId: order.id,
+              amount: totalSellingPrice,
+              paymentGateway: 'PENDING',
+              status: 'PENDING',
+            },
+          });
+
+          return order.id;
+        }, {
+          maxWait: 15000,
+          timeout: 30000,
+        });
+
+        const fullOrder = await prisma.order.findUnique({
+          where: { id: orderId },
+          include: {
+            user: true,
+            shippingAddress: true,
+            orderItems: { include: { product: true, seller: true } },
+            payment: true,
+          },
+        });
+
+        createdOrders.push(formatOrder(fullOrder));
+      }
+
+      return createdOrders;
+    } catch (error) {
+      console.error("[OrderService] checkout transaction error:", error.message);
+      throw error;
+    }
   }
 
   async findOrderById(orderId) {
-    if (!mongoose.Types.ObjectId.isValid(orderId)) {
-      throw new OrderError("Invalid Order ID...");
-    }
-    let order = await Order.findById(orderId).populate([
-      { path: "seller" },
-      { path: "shippingAddress" },
-      { path: "orderItems", populate: { path: "product" } },
-    ]);
+    if (!orderId) throw new OrderError("Order ID is required");
+
+    const order = await prisma.order.findUnique({
+      where: { id: String(orderId) },
+      include: {
+        user: true,
+        shippingAddress: true,
+        orderItems: { include: { product: true, seller: true } },
+        payment: true,
+      },
+    });
 
     if (!order) {
       throw new OrderError(`Order not found with id ${orderId}`);
     }
 
-    order = order.toObject();
-
-    // Fallback population if refs are mixed
-    const Product = require("../models/Product");
-    const Seller = require("../models/Seller");
-
-    if (order.shippingAddress && (typeof order.shippingAddress === 'string' || !order.shippingAddress.address)) {
-      try {
-        const addr = await Address.findById(order.shippingAddress);
-        if (addr) order.shippingAddress = addr;
-      } catch (e) {}
-    }
-
-    if (order.seller && (typeof order.seller === 'string' || !order.seller.sellerName)) {
-      try {
-        const sel = await Seller.findById(order.seller);
-        if (sel) order.seller = sel;
-      } catch (e) {}
-    }
-
-    if (Array.isArray(order.orderItems)) {
-      const populatedItems = [];
-      for (const rawItem of order.orderItems) {
-        let item = rawItem;
-        if (!item || !item.size || typeof item === 'string' || item instanceof mongoose.Types.ObjectId) {
-          try {
-            const dbItem = await OrderItem.findById(item?._id || item);
-            if (dbItem) item = dbItem.toObject();
-          } catch (e) {}
-        }
-        if (item && typeof item === 'object') {
-          if (item.product && (typeof item.product === 'string' || !item.product.title)) {
-            try {
-              const prod = await Product.findById(item.product._id || item.product).populate("seller");
-              if (prod) item.product = prod;
-            } catch (e) {}
-          }
-          populatedItems.push(item);
-        }
-      }
-      if (populatedItems.length > 0) order.orderItems = populatedItems;
-    }
-
-    return order;
+    return formatOrder(order);
   }
 
   async findOrderItemById(orderItemId) {
-    if (!mongoose.Types.ObjectId.isValid(orderItemId)) {
-      throw new OrderError("Invalid Order Item ID...");
-    }
+    if (!orderItemId) throw new OrderError("Order Item ID is required");
 
-    let orderItem = await OrderItem.findById(orderItemId).populate([
-      { path: "product", populate: { path: "seller" } },
-    ]);
+    const item = await prisma.orderItem.findUnique({
+      where: { id: String(orderItemId) },
+      include: { product: true, seller: true },
+    });
 
-    if (!orderItem) {
+    if (!item) {
       throw new OrderError(`Order item not found with id ${orderItemId}`);
     }
 
-    orderItem = orderItem.toObject();
-
-    const Product = require("../models/Product");
-    if (orderItem.product && (typeof orderItem.product === 'string' || !orderItem.product.title)) {
-      try {
-        const prod = await Product.findById(orderItem.product._id || orderItem.product).populate("seller");
-        if (prod) {
-          orderItem.product = prod;
-        }
-      } catch (e) {}
-    }
-
-    return orderItem;
+    return formatOrderItem(item);
   }
 
   async usersOrderHistory(userId) {
-    const rawOrders = await Order.find({ user: userId }).sort({ orderDate: -1 }).populate([
-      { path: "seller" },
-      { path: "shippingAddress" },
-      { path: "orderItems", populate: { path: "product" } },
-    ]);
+    const orders = await prisma.order.findMany({
+      where: { userId: String(userId) },
+      include: {
+        user: true,
+        shippingAddress: true,
+        orderItems: { include: { product: true, seller: true } },
+        payment: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    const Product = require("../models/Product");
-    const Seller = require("../models/Seller");
-
-    const orders = [];
-    for (const rawOrder of rawOrders) {
-      let order = rawOrder.toObject();
-      if (order.shippingAddress && (typeof order.shippingAddress === 'string' || !order.shippingAddress.address)) {
-        try {
-          const addr = await Address.findById(order.shippingAddress);
-          if (addr) order.shippingAddress = addr;
-        } catch (e) {}
-      }
-      if (order.seller && (typeof order.seller === 'string' || !order.seller.sellerName)) {
-        try {
-          const sel = await Seller.findById(order.seller);
-          if (sel) order.seller = sel;
-        } catch (e) {}
-      }
-      if (Array.isArray(order.orderItems)) {
-        const populatedItems = [];
-        for (const rawItem of order.orderItems) {
-          let item = rawItem;
-          if (!item || !item.size || typeof item === 'string' || item instanceof mongoose.Types.ObjectId) {
-            try {
-              const dbItem = await OrderItem.findById(item?._id || item);
-              if (dbItem) item = dbItem.toObject();
-            } catch (e) {}
-          }
-          if (item && typeof item === 'object') {
-            if (item.product && (typeof item.product === 'string' || !item.product.title)) {
-              try {
-                const prod = await Product.findById(item.product._id || item.product).populate("seller");
-                if (prod) item.product = prod;
-              } catch (e) {}
-            }
-            populatedItems.push(item);
-          }
-        }
-        if (populatedItems.length > 0) order.orderItems = populatedItems;
-      }
-      orders.push(order);
-    }
-
-    return orders;
+    return orders.map(formatOrder);
   }
 
   async getShopsOrders(sellerId) {
-    return await Order.find({ seller: sellerId })
-      .sort({ orderDate: -1 })
-      .populate([
-        { path: "seller" },
-        { path: "shippingAddress" },
-        { path: "orderItems", populate: { path: "product" } },
-      ]);
+    const orders = await prisma.order.findMany({
+      where: {
+        orderItems: {
+          some: { sellerId: String(sellerId) },
+        },
+      },
+      include: {
+        user: true,
+        shippingAddress: true,
+        orderItems: { include: { product: true, seller: true } },
+        payment: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return orders.map(formatOrder);
   }
 
   async updateOrderStatus(orderId, orderStatus) {
-    const order = await this.findOrderById(orderId);
+    const prismaStatus = toPrismaOrderStatus(orderStatus);
 
-    order.orderStatus = orderStatus;
+    const updated = await prisma.order.update({
+      where: { id: String(orderId) },
+      data: { status: prismaStatus },
+      include: {
+        user: true,
+        shippingAddress: true,
+        orderItems: { include: { product: true, seller: true } },
+        payment: true,
+      },
+    });
 
-   
-    return await Order.findByIdAndUpdate(orderId, order, {
-      new: true,
-      runValidators: true,
-    }).populate([
-      { path: "seller" },
-      { path: "shippingAddress" },
-      { path: "orderItems", populate: { path: "product" } },
-    ]);
-  }
-
-  async deleteOrder(orderId) {
-    const order = await this.findOrderById(orderId);
-    if (!order) {
-      throw new OrderError(`Order not found with id ${orderId}`);
-    }
-    return await Order.deleteOne({ _id: orderId });
+    return formatOrder(updated);
   }
 
   async cancelOrder(orderId, user) {
-    const order = await this.findOrderById(orderId);
-    if (user._id.toString() !== order.user.toString()) {
-      throw new OrderError(
-        `You can't perform this action on order id ${orderId}`
-      );
+    const order = await prisma.order.findUnique({
+      where: { id: String(orderId) },
+      include: { orderItems: true },
+    });
+
+    if (!order) {
+      throw new OrderError(`Order not found with id ${orderId}`);
     }
-    order.orderStatus = OrderStatus.CANCELLED;
-    return await Order.findByIdAndUpdate(orderId, order, { new: true });
+
+    const userId = user?.id || user?._id;
+    if (userId && String(order.userId) !== String(userId)) {
+      throw new OrderError(`You can't perform this action on order id ${orderId}`);
+    }
+
+    // Cancel order and restore product stock atomically
+    const cancelled = await prisma.$transaction(async (tx) => {
+      const o = await tx.order.update({
+        where: { id: order.id },
+        data: { status: 'CANCELLED' },
+        include: {
+          user: true,
+          shippingAddress: true,
+          orderItems: { include: { product: true, seller: true } },
+          payment: true,
+        },
+      });
+
+      for (const item of order.orderItems) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            stockQuantity: { increment: item.quantity },
+            status: 'ACTIVE',
+          },
+        });
+      }
+
+      return o;
+    });
+
+    return formatOrder(cancelled);
+  }
+
+  async deleteOrder(orderId) {
+    await prisma.order.delete({
+      where: { id: String(orderId) },
+    });
+    return { message: "Order deleted successfully", orderId };
+  }
+
+  formatOrder(o) {
+    return formatOrder(o);
   }
 }
 

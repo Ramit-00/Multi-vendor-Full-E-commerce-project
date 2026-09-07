@@ -1,6 +1,4 @@
 const CartItem = require("../models/CartItem");
-const Product = require("../models/Product");
-const User = require("../models/User");
 const Cart = require("../models/Cart");
 const ProductService = require("./ProductService");
 
@@ -221,6 +219,36 @@ class CartService {
 
     fallbackCart.cartItems.push(newFallbackItem);
     return newFallbackItem;
+  }
+
+  async clearCart(user) {
+    const userId = this._getUserId(user);
+    try {
+      const cart = await Cart.findOne({ user: userId });
+      if (cart) {
+        await CartItem.deleteMany({ cart: cart._id });
+        cart.cartItems = [];
+        cart.totalSellingPrice = 0;
+        cart.totalMrpPrice = 0;
+        cart.totalItem = 0;
+        cart.discount = 0;
+        cart.couponCode = null;
+        cart.couponPrice = 0;
+        await cart.save();
+      }
+    } catch (e) {
+      console.warn('[CartService] clearCart notice:', e.message);
+    }
+    if (this.fallbackCarts.has(userId)) {
+      const fc = this.fallbackCarts.get(userId);
+      fc.cartItems = [];
+      fc.totalSellingPrice = 0;
+      fc.totalMrpPrice = 0;
+      fc.totalItem = 0;
+      fc.discount = 0;
+      fc.couponCode = null;
+      fc.couponPrice = 0;
+    }
   }
 }
 

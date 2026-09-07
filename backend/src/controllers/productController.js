@@ -1,5 +1,3 @@
-const Product = require("../models/Product");
-const Seller = require("../models/Seller");
 const ProductService = require("../services/ProductService");
 const { createProductSchema } = require("../validators/productValidators");
 const Yup = require("yup");

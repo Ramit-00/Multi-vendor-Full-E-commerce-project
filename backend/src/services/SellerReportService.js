@@ -5,35 +5,42 @@ const OrderService = require("./OrderService");
 class SellerReportService {
   async getSellerReport(seller) {
     try {
-      let sellerReport = await SellerReport.findOne({ seller: seller._id });
-      console.log("Seller Report", sellerReport);
-
-      const orders = await OrderService.getShopsOrders(seller._id);
+      const sellerId = String(seller?.id || seller?._id || seller);
+      const orders = await OrderService.getShopsOrders(sellerId);
 
       const totalEarning = orders.reduce(
-        (total, order) => total + order.totalSellingPrice,
+        (total, order) => total + (Number(order.totalSellingPrice) || 0),
         0
       );
 
       const canceledOrders = orders.filter(
-        (order) => order.orderStatus == OrderStatus.CANCELLED
+        (order) => order.orderStatus === OrderStatus.CANCELLED || order.status === 'CANCELLED'
       );
-      console.log("canceled Orders", canceledOrders)
       const totalRefunds = canceledOrders.reduce(
-        (total, order) => total + order.totalSellingPrice,
+        (total, order) => total + (Number(order.totalSellingPrice) || 0),
         0
       );
 
-      sellerReport = new SellerReport({
-        seller: seller._id,
-        totalOrders: orders.length,
-        totalEarnings: totalEarning,
-        totalSales: orders.length,
-        canceledOrders:canceledOrders.length,
-        totalRefunds:totalRefunds
-      });
+      let sellerReport = await SellerReport.findOne({ seller: sellerId });
 
-      sellerReport = await sellerReport.save();
+      if (sellerReport) {
+        sellerReport.totalOrders = orders.length;
+        sellerReport.totalEarnings = totalEarning;
+        sellerReport.totalSales = orders.length;
+        sellerReport.canceledOrders = canceledOrders.length;
+        sellerReport.totalRefunds = totalRefunds;
+        await sellerReport.save();
+      } else {
+        sellerReport = new SellerReport({
+          seller: sellerId,
+          totalOrders: orders.length,
+          totalEarnings: totalEarning,
+          totalSales: orders.length,
+          canceledOrders: canceledOrders.length,
+          totalRefunds: totalRefunds,
+        });
+        await sellerReport.save();
+      }
 
       return sellerReport;
     } catch (err) {
@@ -43,9 +50,8 @@ class SellerReportService {
 
   async updateSellerReport(sellerReport) {
     try {
-      // Update and save the seller report
       return await SellerReport.findByIdAndUpdate(
-        sellerReport._id,
+        sellerReport._id || sellerReport.id,
         sellerReport,
         { new: true }
       );

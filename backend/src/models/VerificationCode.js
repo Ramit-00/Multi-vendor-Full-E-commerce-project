@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-
 const verificationCodeSchema = new Schema({
     otp: { 
         type: String, 
@@ -12,14 +11,15 @@ const verificationCodeSchema = new Schema({
         required: true 
     },
     user: { 
-        type: Schema.Types.ObjectId, 
-        ref: 'User' 
+        type: Schema.Types.Mixed, 
     },
     seller: { 
-        type: Schema.Types.ObjectId, 
-        ref: 'Seller' 
+        type: Schema.Types.Mixed, 
     }
 }, { timestamps: true });
+
+// TTL index to automatically expire OTP records after 10 minutes (600 seconds)
+verificationCodeSchema.index({ createdAt: 1 }, { expireAfterSeconds: 600 });
 
 const VerificationCode = mongoose.model('VerificationCode', verificationCodeSchema);
 

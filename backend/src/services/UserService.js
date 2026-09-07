@@ -1,154 +1,322 @@
-const User = require('../models/User');
+const prisma = require('../config/prisma');
 const jwtProvider = require('../utils/jwtProvider');
 const UserError = require('../exceptions/UserError');
-const mongoose = require('mongoose');
+
+function toAppRole(prismaRole) {
+  if (prismaRole === 'ADMIN') return 'ROLE_ADMIN';
+  if (prismaRole === 'SELLER') return 'ROLE_SELLER';
+  return 'ROLE_CUSTOMER';
+}
+
+function toPrismaRole(appRole) {
+  if (appRole === 'ROLE_ADMIN' || appRole === 'ADMIN') return 'ADMIN';
+  if (appRole === 'ROLE_SELLER' || appRole === 'SELLER') return 'SELLER';
+  return 'BUYER';
+}
+
+function formatAddress(addr, user) {
+  if (!addr) return null;
+  return {
+    id: addr.id,
+    _id: addr.id,
+    userId: addr.userId,
+    name: user?.name || user?.fullName || 'Customer',
+    line1: addr.line1,
+    address: addr.line1,
+    line2: addr.line2 || '',
+    locality: addr.line2 || '',
+    city: addr.city,
+    state: addr.state,
+    pincode: addr.pincode,
+    pinCode: addr.pincode,
+    mobile: user?.phone || user?.mobile || '',
+    isDefault: addr.isDefault || false,
+    createdAt: addr.createdAt,
+  };
+}
+
+function formatUser(user) {
+  if (!user) return null;
+  const addresses = (user.addresses || []).map(a => formatAddress(a, user));
+  return {
+    id: user.id,
+    _id: user.id,
+    name: user.name,
+    fullName: user.name,
+    email: user.email,
+    mobile: user.phone || '',
+    phone: user.phone || '',
+    role: toAppRole(user.role),
+    accountType: user.role === 'ADMIN' ? 'ADMIN' : (user.role === 'SELLER' ? 'SELLER' : 'CUSTOMER'),
+    status: 'ACTIVE',
+    addresses,
+    seller: user.seller || null,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
 
 class UserService {
-    async findUserProfileByJwt(jwt) {
-        const email = jwtProvider.getEmailFromJwt(jwt);
-        const normalized = (email || '').toLowerCase().trim();
-        const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+  async findUserProfileByJwt(jwt) {
+    const email = jwtProvider.getEmailFromJwt(jwt);
+    const normalized = (email || '').toLowerCase().trim();
 
-        if (dbConnected) {
-            let user = await User.findOne({ email: normalized }).populate("addresses");
-            const AuthService = require('./AuthService');
-            const cached = AuthService.getFallbackUser ? AuthService.getFallbackUser(normalized) : null;
+    try {
+      const user = await prisma.user.findUnique({
+        where: { email: normalized },
+        include: {
+          addresses: true,
+          seller: true,
+        },
+      });
 
-            if (user) {
-                // If offline cache contains a newer user-edited profile, sync into MongoDB
-                if (cached && cached.fullName && cached.fullName !== user.fullName) {
-                    const cacheUpdated = cached.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
-                    const dbUpdated = user.updatedAt ? new Date(user.updatedAt).getTime() : 0;
-                    if (cacheUpdated >= dbUpdated) {
-                        user.fullName = cached.fullName;
-                        if (cached.mobile) user.mobile = cached.mobile;
-                        await User.updateOne({ email: normalized }, { $set: { fullName: user.fullName, mobile: user.mobile } });
-                    }
-                }
-                AuthService.setFallbackUser(normalized, user.toObject ? user.toObject() : user);
-                return user;
-            } else if (cached) {
-                // User exists in offline cache but not yet in DB, sync into MongoDB
-                try {
-                    const crypto = require('crypto');
-                    const bcrypt = require('bcrypt');
-                    const randomPassword = crypto.randomBytes(16).toString('hex');
-                    const hashedPassword = await bcrypt.hash(randomPassword, 10);
-                    const newUser = new User({
-                        email: normalized,
-                        fullName: cached.fullName || (AuthService.formatDefaultName ? AuthService.formatDefaultName(normalized) : 'User'),
-                        role: cached.role || 'ROLE_CUSTOMER',
-                        accountType: cached.accountType || 'CUSTOMER',
-                        status: cached.status || 'ACTIVE',
-                        mobile: cached.mobile || '',
-                        password: hashedPassword,
-                    });
-                    await newUser.save();
-                    AuthService.setFallbackUser(normalized, newUser.toObject ? newUser.toObject() : newUser);
-                    return newUser;
-                } catch (e) {
-                    console.warn("Could not sync cached user to DB:", e.message);
-                    return cached;
-                }
-            } else {
-                throw new UserError(`User does not exist with email ${email}`);
-            }
-        } else {
-            const AuthService = require('./AuthService');
-            let user = AuthService.getFallbackUser ? AuthService.getFallbackUser(normalized) : null;
-            if (!user) {
-                user = {
-                    _id: `offline_${normalized}`,
-                    fullName: AuthService.formatDefaultName ? AuthService.formatDefaultName(normalized) : (normalized.split('@')[0] || 'User'),
-                    email: normalized,
-                    mobile: '',
-                    role: 'ROLE_CUSTOMER',
-                    accountType: 'CUSTOMER',
-                    status: 'ACTIVE',
-                    addresses: [],
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                };
-                if (AuthService.setFallbackUser) {
-                    AuthService.setFallbackUser(normalized, user);
-                }
-            }
-            return user;
+      if (user) {
+        const formatted = formatUser(user);
+        const AuthService = require('./AuthService');
+        if (AuthService.setFallbackUser) {
+          AuthService.setFallbackUser(normalized, formatted);
         }
+        return formatted;
+      }
+    } catch (err) {
+      console.warn('[UserService] Database findUserProfileByJwt notice:', err.message);
     }
 
-    async findUserByEmail(email) {
-        const normalized = (email || '').toLowerCase().trim();
-        const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+    // Fallback to offline cache
+    const AuthService = require('./AuthService');
+    const cached = AuthService.getFallbackUser ? AuthService.getFallbackUser(normalized) : null;
+    if (cached) return cached;
 
-        if (dbConnected) {
-            const user = await User.findOne({ email: normalized });
-            if (!user) {
-                throw new UserError(`User does not exist with email ${email}`);
-            }
-            return user;
-        } else {
-            const AuthService = require('./AuthService');
-            return (AuthService.getFallbackUser ? AuthService.getFallbackUser(normalized) : (AuthService.fallbackUsers && AuthService.fallbackUsers.get(normalized))) || null;
-        }
+    throw new UserError(`User does not exist with email ${email}`);
+  }
+
+  async findUserByEmail(email) {
+    const normalized = (email || '').toLowerCase().trim();
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { email: normalized },
+        include: {
+          addresses: true,
+          seller: true,
+        },
+      });
+
+      if (user) {
+        return formatUser(user);
+      }
+    } catch (err) {
+      console.warn('[UserService] findUserByEmail database notice:', err.message);
     }
 
-    async updateUserProfile(currentUser, updateData) {
-        const email = (currentUser?.email || '').toLowerCase().trim();
-        const userId = currentUser?._id;
-        const dbConnected = mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+    const AuthService = require('./AuthService');
+    const cached = AuthService.getFallbackUser ? AuthService.getFallbackUser(normalized) : null;
+    if (cached) return cached;
 
-        const allowedUpdates = {};
-        if (typeof updateData.fullName === 'string' && updateData.fullName.trim()) {
-            allowedUpdates.fullName = updateData.fullName.trim();
-        }
-        if (typeof updateData.mobile === 'string') {
-            allowedUpdates.mobile = updateData.mobile.trim();
-        }
-        allowedUpdates.updatedAt = new Date().toISOString();
+    throw new UserError(`User does not exist with email ${email}`);
+  }
 
-        if (dbConnected) {
-            let updatedUser = null;
-            if (userId && !String(userId).startsWith('offline_')) {
-                updatedUser = await User.findByIdAndUpdate(userId, { $set: allowedUpdates }, { new: true }).select("-password").populate("addresses");
-            }
-            if (!updatedUser && email) {
-                updatedUser = await User.findOneAndUpdate({ email }, { $set: allowedUpdates }, { new: true }).select("-password").populate("addresses");
-            }
-            if (!updatedUser) {
-                throw new UserError("User account not found");
-            }
-            // Keep disk cache synced
-            const AuthService = require('./AuthService');
-            if (AuthService.setFallbackUser) {
-                AuthService.setFallbackUser(email, updatedUser.toObject ? updatedUser.toObject() : updatedUser);
-            }
-            return updatedUser;
-        } else {
-            const AuthService = require('./AuthService');
-            let user = AuthService.getFallbackUser ? AuthService.getFallbackUser(email) : null;
-            if (!user) {
-                user = {
-                    _id: userId || `offline_${email}`,
-                    email,
-                    fullName: allowedUpdates.fullName || (AuthService.formatDefaultName ? AuthService.formatDefaultName(email) : 'User'),
-                    mobile: allowedUpdates.mobile || '',
-                    role: currentUser?.role || 'ROLE_CUSTOMER',
-                    accountType: 'CUSTOMER',
-                    status: 'ACTIVE',
-                    addresses: currentUser?.addresses || [],
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                };
-            } else {
-                Object.assign(user, allowedUpdates);
-            }
-            if (AuthService.setFallbackUser) {
-                AuthService.setFallbackUser(email, user);
-            }
-            return user;
-        }
+  async findUserById(id) {
+    if (!id) throw new UserError('User ID is required');
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: String(id) },
+        include: {
+          addresses: true,
+          seller: true,
+        },
+      });
+
+      if (user) {
+        return formatUser(user);
+      }
+    } catch (err) {
+      console.warn('[UserService] findUserById notice:', err.message);
     }
+
+    throw new UserError(`User not found with id ${id}`);
+  }
+
+  async updateUserProfile(currentUser, updateData) {
+    const email = (currentUser?.email || '').toLowerCase().trim();
+    const userId = currentUser?.id || currentUser?._id;
+
+    const dataToUpdate = {};
+    if (typeof updateData.fullName === 'string' && updateData.fullName.trim()) {
+      dataToUpdate.name = updateData.fullName.trim();
+    } else if (typeof updateData.name === 'string' && updateData.name.trim()) {
+      dataToUpdate.name = updateData.name.trim();
+    }
+
+    if (typeof updateData.mobile === 'string') {
+      dataToUpdate.phone = updateData.mobile.trim();
+    } else if (typeof updateData.phone === 'string') {
+      dataToUpdate.phone = updateData.phone.trim();
+    }
+
+    try {
+      let updatedUser = null;
+      if (userId && !String(userId).startsWith('offline_')) {
+        updatedUser = await prisma.user.update({
+          where: { id: String(userId) },
+          data: dataToUpdate,
+          include: { addresses: true, seller: true },
+        });
+      } else if (email) {
+        updatedUser = await prisma.user.update({
+          where: { email },
+          data: dataToUpdate,
+          include: { addresses: true, seller: true },
+        });
+      }
+
+      if (updatedUser) {
+        const formatted = formatUser(updatedUser);
+        const AuthService = require('./AuthService');
+        if (AuthService.setFallbackUser) {
+          AuthService.setFallbackUser(email, formatted);
+        }
+        return formatted;
+      }
+    } catch (err) {
+      console.warn('[UserService] updateUserProfile notice:', err.message);
+    }
+
+    // Offline fallback update
+    const AuthService = require('./AuthService');
+    let fallback = AuthService.getFallbackUser ? AuthService.getFallbackUser(email) : null;
+    if (!fallback) {
+      fallback = {
+        _id: userId || `offline_${email}`,
+        id: userId || `offline_${email}`,
+        email,
+        fullName: dataToUpdate.name || 'User',
+        name: dataToUpdate.name || 'User',
+        mobile: dataToUpdate.phone || '',
+        phone: dataToUpdate.phone || '',
+        role: currentUser?.role || 'ROLE_CUSTOMER',
+        accountType: 'CUSTOMER',
+        status: 'ACTIVE',
+        addresses: currentUser?.addresses || [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      if (dataToUpdate.name) {
+        fallback.fullName = dataToUpdate.name;
+        fallback.name = dataToUpdate.name;
+      }
+      if (dataToUpdate.phone !== undefined) {
+        fallback.mobile = dataToUpdate.phone;
+        fallback.phone = dataToUpdate.phone;
+      }
+      fallback.updatedAt = new Date().toISOString();
+    }
+
+    if (AuthService.setFallbackUser) {
+      AuthService.setFallbackUser(email, fallback);
+    }
+    return fallback;
+  }
+
+  async addAddress(currentUser, addressData) {
+    const email = (currentUser?.email || '').toLowerCase().trim();
+    let userId = currentUser?.id || currentUser?._id;
+
+    if (!userId || String(userId).startsWith('offline_')) {
+      try {
+        const dbUser = await prisma.user.findUnique({ where: { email } });
+        if (dbUser) userId = dbUser.id;
+      } catch (e) {}
+    }
+
+    if (!userId) {
+      throw new UserError('User account not found to attach address');
+    }
+
+    const line1 = addressData.line1 || addressData.address || addressData.locality || 'Standard Address';
+    const line2 = addressData.line2 || addressData.locality || addressData.name || null;
+    const city = addressData.city || 'City';
+    const state = addressData.state || 'State';
+    const pincode = String(addressData.pincode || addressData.pinCode || '000000').trim();
+
+    const created = await prisma.address.create({
+      data: {
+        userId,
+        line1,
+        line2,
+        city,
+        state,
+        pincode,
+        isDefault: !!addressData.isDefault,
+      },
+    });
+
+    const formatted = formatAddress(created, currentUser);
+
+    // Sync offline cache
+    const AuthService = require('./AuthService');
+    const cached = AuthService.getFallbackUser ? AuthService.getFallbackUser(email) : null;
+    if (cached) {
+      if (!Array.isArray(cached.addresses)) cached.addresses = [];
+      cached.addresses.push(formatted);
+      AuthService.setFallbackUser(email, cached);
+    }
+
+    return formatted;
+  }
+
+  async deleteAddress(currentUser, addressId) {
+    const email = (currentUser?.email || '').toLowerCase().trim();
+    const userId = currentUser?.id || currentUser?._id;
+
+    try {
+      await prisma.address.deleteMany({
+        where: {
+          id: String(addressId),
+          ...(userId && !String(userId).startsWith('offline_') ? { userId: String(userId) } : {}),
+        },
+      });
+    } catch (e) {
+      console.warn('[UserService] deleteAddress notice:', e.message);
+    }
+
+    // Sync offline cache
+    const AuthService = require('./AuthService');
+    const cached = AuthService.getFallbackUser ? AuthService.getFallbackUser(email) : null;
+    if (cached && Array.isArray(cached.addresses)) {
+      cached.addresses = cached.addresses.filter(a => String(a._id || a.id) !== String(addressId));
+      AuthService.setFallbackUser(email, cached);
+    }
+
+    return { message: 'Address deleted successfully', addressId };
+  }
+
+  async getAllUsers() {
+    const users = await prisma.user.findMany({
+      where: { role: { not: 'ADMIN' } },
+      include: { addresses: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return users.map(formatUser);
+  }
+
+  formatUser(u) {
+    return formatUser(u);
+  }
+
+  formatAddress(a, u) {
+    return formatAddress(a, u);
+  }
+
+  toAppRole(r) {
+    return toAppRole(r);
+  }
+
+  toPrismaRole(r) {
+    return toPrismaRole(r);
+  }
 }
 
 module.exports = new UserService();
