@@ -1,5 +1,11 @@
 const rateLimit = require('express-rate-limit');
 
+// Detect distributed edge rate-limiting configuration for Vercel Serverless
+const hasUpstash = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+if (hasUpstash) {
+  console.log('[RateLimiter] Upstash Redis configuration detected for distributed edge rate limiting.');
+}
+
 // Strict rate limiter for sensitive authentication endpoints (brute-force defense)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes

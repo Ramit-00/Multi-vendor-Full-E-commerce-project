@@ -16,6 +16,12 @@ router.get('/item/:orderItemId', userAuthMiddleware, orderController.getOrderIte
 // Cancel an order
 router.put('/:orderId/cancel', userAuthMiddleware, orderController.cancelOrder);
 
+// Download / view order invoice
+router.get('/:orderId/invoice', userAuthMiddleware, orderController.getOrderInvoice);
+
+// Request refund for an order
+router.post('/:orderId/refund', userAuthMiddleware, orderController.requestRefund);
+
 // Get order by ID
 router.get('/:orderId', userAuthMiddleware, orderController.getOrderById);
 

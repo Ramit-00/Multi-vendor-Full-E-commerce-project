@@ -42,17 +42,33 @@ mongoose.connection.on('disconnected', () => {
   scheduleReconnect();
 });
 
+let cached = global.mongoose;
+if (!cached) {
+  cached = global.mongoose = { conn: null, promise: null };
+}
+
 const connectMongo = async () => {
-  try {
-    const conn = await mongoose.connect(process.env.MONGO_URI, {
+  if (cached.conn && mongoose.connection.readyState === 1) {
+    return cached.conn;
+  }
+
+  if (!cached.promise) {
+    const opts = {
       serverSelectionTimeoutMS: 20000,
       connectTimeoutMS: 20000,
       socketTimeoutMS: 45000,
+    };
+    cached.promise = mongoose.connect(process.env.MONGO_URI, opts).then((m) => {
+      console.log(`MongoDB connected: ${m.connection.host}`);
+      return m;
     });
+  }
 
-    console.log(`MongoDB connected: ${conn.connection.host}`);
-    return conn;
+  try {
+    cached.conn = await cached.promise;
+    return cached.conn;
   } catch (error) {
+    cached.promise = null;
     console.error(`MongoDB Initial Connection Error: ${error.message}`);
     if (process.env.ALLOW_OFFLINE === 'true') {
       console.warn('ALLOW_OFFLINE is true — continuing and retrying MongoDB connection in background...');

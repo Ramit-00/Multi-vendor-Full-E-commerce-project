@@ -19,7 +19,7 @@ import { addProductToWishlist } from '../../../../Redux Toolkit/Customer/Wishlis
 import ProductReviewCard from '../../Review/ProductReviewCard';
 import RatingCard from '../../Review/RatingCard';
 import { fetchReviewsByProductId } from '../../../../Redux Toolkit/Customer/ReviewSlice';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { normalizeImageUrl } from '../../../../util/imageUtil';
 import { isWishlisted } from '../../../../util/isWishlisted';
 
@@ -47,6 +47,35 @@ const ProductDetails = () => {
     const { productId, categoryId } = useParams();
     const [selectedImage, setSelectedImage] = useState(0);
     const [quantity, setQuantity] = useState(1);
+    const [selectedSize, setSelectedSize] = useState<string>("FREE");
+
+    const availableSizes: string[] = useMemo(() => {
+        const raw = (products.product as any)?.sizes;
+        if (Array.isArray(raw) && raw.length > 0) return raw;
+        if (typeof raw === 'string' && raw.trim()) {
+            return raw.split(',').map((s: string) => s.trim()).filter(Boolean);
+        }
+        return ['S', 'M', 'L', 'XL'];
+    }, [products.product]);
+
+    useEffect(() => {
+        if (availableSizes.length > 0 && !availableSizes.includes(selectedSize)) {
+            setSelectedSize(availableSizes[0]);
+        }
+    }, [availableSizes]);
+
+    useEffect(() => {
+        if (products.product?.title) {
+            document.title = `${products.product.title} | E-Commerce Marketplace`;
+            let ogTitle = document.querySelector('meta[property="og:title"]');
+            if (!ogTitle) {
+                ogTitle = document.createElement('meta');
+                ogTitle.setAttribute('property', 'og:title');
+                document.head.appendChild(ogTitle);
+            }
+            ogTitle.setAttribute('content', products.product.title);
+        }
+    }, [products.product]);
 
     useEffect(() => {
         if (productId) {
@@ -73,14 +102,14 @@ const ProductDetails = () => {
             jwt: localStorage.getItem('jwt'),
             request: {
                 productId,
-                size: "FREE",
+                size: selectedSize || "FREE",
                 quantity,
                 product: products.product
             }
         }));
         setNotification({
             open: true,
-            message: "Item successfully added to your shopping bag!",
+            message: `Added (${selectedSize || 'FREE'}) to your shopping bag!`,
             actionText: "View Bag",
             actionPath: "/cart"
         });
@@ -224,6 +253,32 @@ const ProductDetails = () => {
                             </div>
                         </div>
 
+                        {/* Size Variant Selection */}
+                        {availableSizes.length > 0 && (
+                            <div className='mt-6'>
+                                <div className='flex items-center justify-between'>
+                                    <span className='text-xs font-bold uppercase tracking-wider text-slate-600'>Select Size:</span>
+                                    <span className='text-xs text-slate-500 font-medium'>Selected: <strong>{selectedSize}</strong></span>
+                                </div>
+                                <div className='flex items-center gap-2.5 mt-2.5 flex-wrap'>
+                                    {availableSizes.map((sz: string) => (
+                                        <button
+                                            key={sz}
+                                            type="button"
+                                            onClick={() => setSelectedSize(sz)}
+                                            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                                                selectedSize === sz
+                                                    ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                                            }`}
+                                        >
+                                            {sz}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Quantity Stepper */}
                         <div className='mt-6 flex items-center gap-4'>
                             <span className='text-xs font-bold uppercase tracking-wider text-slate-600'>Quantity:</span>
@@ -253,10 +308,11 @@ const ProductDetails = () => {
                         <div className="mt-8 flex flex-col sm:flex-row items-center gap-4">
                             <Button
                                 onClick={handleAddCart}
+                                disabled={products.product?.quantity === 0 || (products.product as any)?.stockQuantity === 0}
                                 sx={{
                                     py: "12px",
-                                    backgroundColor: "#0F172A",
-                                    "&:hover": { backgroundColor: "#1E293B" },
+                                    backgroundColor: (products.product?.quantity === 0 || (products.product as any)?.stockQuantity === 0) ? "#94A3B8" : "#0F172A",
+                                    "&:hover": { backgroundColor: (products.product?.quantity === 0 || (products.product as any)?.stockQuantity === 0) ? "#94A3B8" : "#1E293B" },
                                     fontWeight: 700,
                                     borderRadius: "10px",
                                     textTransform: "none",
@@ -265,7 +321,7 @@ const ProductDetails = () => {
                                 fullWidth
                                 startIcon={<AddShoppingCartIcon />}
                             >
-                                Add To Bag
+                                {(products.product?.quantity === 0 || (products.product as any)?.stockQuantity === 0) ? "Out of Stock" : "Add To Bag"}
                             </Button>
                             <Button
                                 onClick={handleWishlistClick}

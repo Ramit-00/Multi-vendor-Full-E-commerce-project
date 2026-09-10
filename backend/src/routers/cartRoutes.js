@@ -13,4 +13,6 @@ router.delete('/item/:cartItemId',authMiddleware, cartController.deleteCartItemH
 
 router.put('/item/:cartItemId',authMiddleware, cartController.updateCartItemHandler);
 
+router.post('/merge', authMiddleware, cartController.mergeCartHandler);
+
 module.exports = router;

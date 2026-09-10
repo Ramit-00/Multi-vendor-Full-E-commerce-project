@@ -3,6 +3,7 @@ const prisma = require('../config/prisma');
 const PaymentStatus = require('../domain/PaymentStatus');
 const PaymentOrderStatus = require('../domain/PaymentOrderStatus');
 const OrderStatus = require('../domain/OrderStatus');
+const PaymentOrder = require('../models/PaymentOrder');
 
 const getStripe = () => {
   const stripeKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_API_KEY || 'sk_test_placeholder';
@@ -31,8 +32,9 @@ class PaymentService {
     const paymentOrder = {
       id: paymentOrderId,
       _id: paymentOrderId,
+      paymentOrderId,
       amount: totalAmount,
-      user: user.id || user._id,
+      user: String(user.id || user._id),
       orders: orderIds,
       status: PaymentOrderStatus.PENDING,
       paymentLinkId: null,
@@ -40,6 +42,19 @@ class PaymentService {
     };
 
     this.inMemoryPaymentOrders.set(paymentOrderId, paymentOrder);
+
+    // Persist in MongoDB for serverless statelessness across Vercel lambdas
+    try {
+      await PaymentOrder.create({
+        paymentOrderId,
+        user: String(user.id || user._id),
+        orders: orderIds,
+        amount: totalAmount,
+        status: PaymentOrderStatus.PENDING,
+      });
+    } catch (mongoErr) {
+      console.warn('[PaymentService] MongoDB PaymentOrder persist note:', mongoErr.message);
+    }
 
     // Also update payments in Postgres with provider
     try {
@@ -60,9 +75,17 @@ class PaymentService {
       po.paymentLinkId = paymentLinkId;
     }
     try {
-      if (po && po.orders) {
+      await PaymentOrder.updateOne(
+        { paymentOrderId: String(paymentOrderId) },
+        { paymentLinkId: String(paymentLinkId) }
+      );
+    } catch (mongoErr) {}
+
+    try {
+      const orderIds = po?.orders;
+      if (orderIds && orderIds.length > 0) {
         await prisma.payment.updateMany({
-          where: { orderId: { in: po.orders } },
+          where: { orderId: { in: orderIds } },
           data: { gatewayTransactionId: paymentLinkId },
         });
       }
@@ -71,10 +94,26 @@ class PaymentService {
   }
 
   async getPaymentOrderById(orderId) {
+    // 1. Check in-memory cache
     const po = this.inMemoryPaymentOrders.get(String(orderId));
     if (po) return po;
 
-    // Fallback: look up in Postgres
+    // 2. Look up in MongoDB PaymentOrder (stateless serverless support)
+    try {
+      const mongoPo = await PaymentOrder.findOne({ paymentOrderId: String(orderId) });
+      if (mongoPo) {
+        return {
+          id: mongoPo.paymentOrderId,
+          _id: mongoPo.paymentOrderId,
+          amount: mongoPo.amount,
+          orders: mongoPo.orders,
+          status: mongoPo.status,
+          paymentLinkId: mongoPo.paymentLinkId,
+        };
+      }
+    } catch (mongoErr) {}
+
+    // 3. Fallback: look up in Postgres
     const payment = await prisma.payment.findFirst({
       where: { orderId: String(orderId) },
     });
@@ -97,11 +136,32 @@ class PaymentService {
       return null;
     }
 
+    // 1. Check in-memory cache
     for (const po of this.inMemoryPaymentOrders.values()) {
-      if (po.paymentLinkId === paymentId || po.id === paymentId) return po;
+      if (po.paymentLinkId === paymentId || po.id === paymentId || po.paymentOrderId === paymentId) return po;
     }
 
-    // Lookup in Postgres by gateway transaction or order id
+    // 2. Look up in MongoDB PaymentOrder (stateless serverless support)
+    try {
+      const mongoPo = await PaymentOrder.findOne({
+        $or: [
+          { paymentLinkId: String(paymentId) },
+          { paymentOrderId: String(paymentId) },
+        ],
+      });
+      if (mongoPo) {
+        return {
+          id: mongoPo.paymentOrderId,
+          _id: mongoPo.paymentOrderId,
+          amount: mongoPo.amount,
+          orders: mongoPo.orders,
+          status: mongoPo.status,
+          paymentLinkId: mongoPo.paymentLinkId,
+        };
+      }
+    } catch (mongoErr) {}
+
+    // 3. Lookup in Postgres by gateway transaction or order id
     const payment = await prisma.payment.findFirst({
       where: {
         OR: [
@@ -183,6 +243,19 @@ class PaymentService {
 
     if (isCaptured) {
       paymentOrder.status = PaymentOrderStatus.SUCCESS;
+
+      // Update PaymentOrder in MongoDB for serverless persistence
+      try {
+        await PaymentOrder.updateOne(
+          {
+            $or: [
+              { paymentOrderId: String(paymentOrder.id || paymentOrder.paymentOrderId) },
+              { paymentLinkId: String(paymentId || paymentLinkId) },
+            ],
+          },
+          { status: PaymentOrderStatus.SUCCESS }
+        );
+      } catch (mongoErr) {}
 
       // Update orders and payments in PostgreSQL
       if (Array.isArray(paymentOrder.orders) && paymentOrder.orders.length > 0) {

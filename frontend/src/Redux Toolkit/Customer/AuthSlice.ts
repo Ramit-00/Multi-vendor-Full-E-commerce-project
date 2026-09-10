@@ -93,6 +93,20 @@ export const signin = createAsyncThunk<AuthResponse, LoginRequest>(
                 if (response.data.user) {
                     dispatch(setUserProfile(response.data.user));
                 }
+                const guestCartRaw = localStorage.getItem("guest_cart");
+                if (guestCartRaw) {
+                    try {
+                        const guestItems = JSON.parse(guestCartRaw);
+                        if (Array.isArray(guestItems) && guestItems.length > 0) {
+                            await api.post('/api/cart/merge', { guestItems }, {
+                                headers: { Authorization: `Bearer ${response.data.jwt}` }
+                            });
+                            localStorage.removeItem("guest_cart");
+                        }
+                    } catch (e) {
+                        console.warn("Guest cart merge notice:", e);
+                    }
+                }
                 dispatch(fetchUserProfile({ jwt: response.data.jwt }));
                 loginRequest.navigate("/");
             }
@@ -123,6 +137,20 @@ export const googleAuthLogin = createAsyncThunk<
             localStorage.removeItem("seller_role");
             localStorage.removeItem("admin_jwt");
             dispatch(resetSellerProfile());
+            const guestCartRaw = localStorage.getItem("guest_cart");
+            if (guestCartRaw) {
+                try {
+                    const guestItems = JSON.parse(guestCartRaw);
+                    if (Array.isArray(guestItems) && guestItems.length > 0) {
+                        await api.post('/api/cart/merge', { guestItems }, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+                        localStorage.removeItem("guest_cart");
+                    }
+                } catch (e) {
+                    console.warn("Guest cart merge notice in Google login:", e);
+                }
+            }
             dispatch(fetchUserProfile({ jwt: token, navigate }));
             navigate("/");
             return response.data;

@@ -250,6 +250,26 @@ class CartService {
       fc.couponPrice = 0;
     }
   }
+
+  async mergeGuestCart(user, guestItems = []) {
+    if (!Array.isArray(guestItems) || guestItems.length === 0) {
+      return await this.findUserCart(user);
+    }
+
+    for (const item of guestItems) {
+      try {
+        const prod = item.product || item.productId || item._id;
+        if (!prod) continue;
+        const size = item.size || 'FREE';
+        const qty = Number(item.quantity) || 1;
+        await this.addCartItem(user, prod, size, qty);
+      } catch (err) {
+        console.warn('[CartService] mergeGuestCart item notice:', err.message);
+      }
+    }
+
+    return await this.findUserCart(user);
+  }
 }
 
 module.exports = new CartService();

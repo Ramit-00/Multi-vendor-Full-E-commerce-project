@@ -161,7 +161,11 @@ const OrderDetails = () => {
           )}
         </div>
         <div className="pt-2">
-          <OrderStepper orderStatus={activeOrder?.orderStatus || 'PENDING'} />
+          <OrderStepper
+            orderStatus={activeOrder?.orderStatus || 'PENDING'}
+            orderDate={activeOrder?.createdAt || activeOrder?.orderDate}
+            orderId={activeOrder?.id || activeOrder?._id}
+          />
         </div>
       </section>
 

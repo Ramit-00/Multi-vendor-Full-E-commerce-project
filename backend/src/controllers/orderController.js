@@ -4,6 +4,7 @@ const UserService = require("../services/UserService");
 const OrderError = require("../exceptions/OrderError");
 const PaymentMethod = require("../domain/PaymentMethod");
 const PaymentService = require("../services/PaymentService");
+const InvoiceService = require("../services/InvoiceService");
 
 class OrderController {
   // Create a new order
@@ -152,6 +153,77 @@ class OrderController {
       return res.status(200).json({ message: "Order deleted successfully" });
     } catch (error) {
       return res.status(404).json({ error: error.message });
+    }
+  }
+
+  // Get invoice HTML or JSON data for an order
+  async getOrderInvoice(req, res) {
+    try {
+      const { orderId } = req.params;
+      const userId = req.user?.id || req.user?._id;
+      const sellerId = req.seller?.id || req.seller?._id;
+      const isAdmin = req.user?.role === 'ROLE_ADMIN' || req.user?.role === 'ADMIN';
+
+      const orderData = await InvoiceService.getInvoiceData(
+        orderId,
+        isAdmin ? null : userId,
+        sellerId
+      );
+
+      // If requested as raw HTML or browser print view:
+      if (req.query.format === 'html' || req.headers.accept?.includes('text/html')) {
+        const html = InvoiceService.renderInvoiceHtml(orderData);
+        res.setHeader('Content-Type', 'text/html');
+        return res.send(html);
+      }
+
+      // Default: Return structured invoice payload with render URL
+      return res.status(200).json({
+        invoiceNumber: `INV-${orderData.id.substring(0, 8).toUpperCase()}`,
+        order: orderData,
+        viewUrl: `/api/orders/${orderData.id}/invoice?format=html`,
+      });
+    } catch (error) {
+      const isAuthErr = error.message.toLowerCase().includes('unauthorized');
+      return res.status(isAuthErr ? 403 : 404).json({ error: error.message });
+    }
+  }
+
+  // Request a refund for an order
+  async requestRefund(req, res) {
+    try {
+      const { orderId } = req.params;
+      const { reason } = req.body;
+      const userId = String(req.user?.id || req.user?._id || '');
+      const prisma = require('../config/prisma');
+
+      const order = await prisma.order.findUnique({
+        where: { id: String(orderId) },
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+
+      if (order.userId !== userId && req.user?.role !== 'ADMIN' && req.user?.role !== 'ROLE_ADMIN') {
+        return res.status(403).json({ error: 'Unauthorized to request refund for this order' });
+      }
+
+      const refund = await prisma.refund.create({
+        data: {
+          orderId: order.id,
+          reason: reason || 'Customer requested refund',
+          amount: order.totalAmount,
+          status: 'REQUESTED',
+        },
+      });
+
+      return res.status(201).json({
+        message: 'Refund request submitted successfully',
+        refund,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
     }
   }
 }

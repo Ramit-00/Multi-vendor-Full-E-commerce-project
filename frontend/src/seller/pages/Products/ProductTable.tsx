@@ -6,7 +6,7 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
-import { Button, IconButton, styled} from '@mui/material';
+import { IconButton, styled, Chip } from '@mui/material';
 import { useAppDispatch, useAppSelector } from '../../../Redux Toolkit/Store';
 import { fetchSellerProducts, updateProduct, deleteProduct } from '../../../Redux Toolkit/Seller/sellerProductSlice';
 import EditIcon from '@mui/icons-material/Edit';
@@ -105,8 +105,17 @@ export default function ProductTable() {
                  <StyledTableCell align="right">{item.title}</StyledTableCell>
                 <StyledTableCell align="right"> ₹{item.mrpPrice}.0</StyledTableCell>
             <StyledTableCell align="right"> ₹{item.sellingPrice}.0</StyledTableCell>
-                   <StyledTableCell align="right">{item.color}</StyledTableCell>
-                   <StyledTableCell align="right"> <Button size='small'>in_stock</Button></StyledTableCell>
+                   <StyledTableCell align="right">
+                    {(() => {
+                      const stock = item.quantity ?? (item as any).stockQuantity ?? 10;
+                      if (stock <= 0) {
+                        return <Chip label="Out of Stock" color="error" size="small" />;
+                      } else if (stock < 5) {
+                        return <Chip label={`Low Stock (${stock})`} color="warning" size="small" sx={{ fontWeight: 700 }} />;
+                      }
+                      return <Chip label={`In Stock (${stock})`} color="success" size="small" variant="outlined" />;
+                    })()}
+                   </StyledTableCell>
                    <StyledTableCell align="right">
                     <IconButton color='primary' className='bg-primary-color' onClick={() => handleEditClick(item)}>
                       <EditIcon/>

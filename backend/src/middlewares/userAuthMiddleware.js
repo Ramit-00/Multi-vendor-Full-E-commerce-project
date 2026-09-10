@@ -39,13 +39,24 @@ const authMiddleware = async (req, res, next) => {
       }
     }
 
-    const user = await UserService.findUserProfileByJwt(token)
+    const user = await UserService.findUserProfileByJwt(token);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    if (user.status === 'BANNED' || user.status === 'SUSPENDED') {
-      return res.status(403).json({ message: "Access denied: Your account has been suspended or banned by administration." });
+    if (user.status === 'BANNED' || user.status === 'SUSPENDED' || user.isDeleted) {
+      return res.status(403).json({ message: "Access denied: Your account has been deactivated, suspended, or banned by administration." });
+    }
+
+    let payload;
+    try {
+      payload = jwtProvider.getPayloadFromJwt(token);
+    } catch (e) {}
+
+    if (payload && payload.tokenVersion !== undefined && user.tokenVersion !== undefined) {
+      if (payload.tokenVersion !== user.tokenVersion) {
+        return res.status(401).json({ message: "Access denied: Session revoked or expired. Please login again." });
+      }
     }
 
     req.user = user;

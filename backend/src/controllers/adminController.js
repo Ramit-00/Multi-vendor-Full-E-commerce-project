@@ -67,6 +67,7 @@ class AdminController {
         role: "ROLE_ADMIN",
         type: "ADMIN",
         adminId: admin.id,
+        tokenVersion: admin.tokenVersion ?? 0,
       });
 
       return res.status(200).json({
@@ -420,6 +421,87 @@ class AdminController {
       return res.status(200).json(transactions);
     } catch (error) {
       return res.status(500).json({ message: "Failed to fetch transactions", error: error.message });
+    }
+  }
+
+  // Refunds Management - List all refunds
+  async getAllRefunds(req, res) {
+    try {
+      const refunds = await prisma.refund.findMany({
+        include: {
+          order: {
+            include: {
+              user: { select: { id: true, name: true, email: true } },
+              orderItems: { include: { product: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return res.status(200).json(refunds.map(r => ({
+        id: r.id,
+        _id: r.id,
+        orderId: r.orderId,
+        reason: r.reason,
+        status: r.status,
+        amount: Number(r.amount),
+        createdAt: r.createdAt,
+        resolvedAt: r.resolvedAt,
+        customer: r.order?.user,
+        order: r.order,
+      })));
+    } catch (error) {
+      return res.status(500).json({ message: "Failed to fetch refunds", error: error.message });
+    }
+  }
+
+  // Refunds Management - Approve refund
+  async approveRefund(req, res) {
+    try {
+      const { refundId } = req.params;
+      const refund = await prisma.refund.update({
+        where: { id: String(refundId) },
+        data: {
+          status: 'APPROVED',
+          resolvedAt: new Date(),
+        },
+        include: { order: true },
+      });
+
+      // Update order payment status to REFUNDED
+      await prisma.payment.updateMany({
+        where: { orderId: refund.orderId },
+        data: { status: 'REFUNDED' },
+      });
+
+      return res.status(200).json({
+        message: "Refund approved successfully",
+        refund,
+      });
+    } catch (error) {
+      return res.status(400).json({ message: "Failed to approve refund", error: error.message });
+    }
+  }
+
+  // Refunds Management - Reject refund
+  async rejectRefund(req, res) {
+    try {
+      const { refundId } = req.params;
+      const refund = await prisma.refund.update({
+        where: { id: String(refundId) },
+        data: {
+          status: 'REJECTED',
+          resolvedAt: new Date(),
+        },
+      });
+
+      return res.status(200).json({
+        message: "Refund rejected",
+        refund,
+      });
+    } catch (error) {
+      return res.status(400).json({ message: "Failed to reject refund", error: error.message });
     }
   }
 }

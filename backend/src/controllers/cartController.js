@@ -72,6 +72,18 @@ class CartController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  // Merge guest cart items upon login
+  async mergeCartHandler(req, res) {
+    try {
+      const user = await req.user;
+      const { guestItems } = req.body;
+      const mergedCart = await CartService.mergeGuestCart(user, guestItems);
+      return res.status(200).json(mergedCart);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  }
 }
 
 module.exports = new CartController();

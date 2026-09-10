@@ -9,6 +9,28 @@ class ReviewService {
     const userId = String(user.id || user._id);
     const prodId = String(product.id || product._id);
 
+    // Verified Purchaser verification: check if user has purchased this product
+    let isVerifiedPurchase = false;
+    try {
+      const prisma = require("../config/prisma");
+      const purchaseRecord = await prisma.orderItem.findFirst({
+        where: {
+          productId: prodId,
+          order: {
+            userId: userId,
+            status: { in: ['DELIVERED', 'SHIPPED', 'CONFIRMED'] },
+          },
+        },
+      });
+      isVerifiedPurchase = Boolean(purchaseRecord);
+    } catch (dbErr) {
+      console.warn('[ReviewService] Purchaser check note:', dbErr.message);
+    }
+
+    if (process.env.STRICT_VERIFIED_REVIEWS === 'true' && !isVerifiedPurchase) {
+      throw createError.Forbidden("Only verified purchasers of this product can submit a review.");
+    }
+
     const review = new Review({
       user: userId,
       product: prodId,
@@ -19,6 +41,7 @@ class ReviewService {
 
     return {
       ...savedReview.toObject(),
+      isVerifiedPurchase,
       user: {
         id: userId,
         _id: userId,

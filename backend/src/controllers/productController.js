@@ -124,6 +124,54 @@ class SellerProductController {
       res.status(400).json({ error: error.message });
     }
   }
+
+  // Bulk product creation for sellers
+  async bulkCreateProducts(req, res) {
+    try {
+      const seller = req.seller;
+      const { products } = req.body;
+      if (!Array.isArray(products) || products.length === 0) {
+        return res.status(400).json({ error: "An array of products is required for bulk creation" });
+      }
+
+      const created = [];
+      const errors = [];
+      for (const prodData of products) {
+        try {
+          const newProd = await ProductService.createProduct(prodData, seller);
+          created.push(newProd);
+        } catch (e) {
+          errors.push({ product: prodData.title || prodData.name, error: e.message });
+        }
+      }
+
+      return res.status(201).json({
+        message: `Successfully created ${created.length} products`,
+        createdCount: created.length,
+        failedCount: errors.length,
+        created,
+        errors,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  }
+
+  // Export catalog for seller
+  async exportSellerProducts(req, res) {
+    try {
+      const sellerId = req.seller ? (req.seller.id || req.seller._id) : null;
+      const products = await ProductService.getProductBySellerId(sellerId);
+      return res.status(200).json({
+        sellerId,
+        exportedAt: new Date().toISOString(),
+        totalProducts: products.length,
+        products,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  }
 }
 
 module.exports = new SellerProductController();

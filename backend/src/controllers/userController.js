@@ -52,6 +52,28 @@ const deleteAddress = async (req, res) => {
   }
 };
 
+const updateAddress = async (req, res) => {
+  try {
+    const user = await req.user;
+    const { addressId } = req.params;
+    const updated = await UserService.updateAddress(user, addressId, req.body);
+    return res.status(200).json(updated);
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to update address", error: err.message });
+  }
+};
+
+const setDefaultAddress = async (req, res) => {
+  try {
+    const user = await req.user;
+    const { addressId } = req.params;
+    const updated = await UserService.setDefaultAddress(user, addressId);
+    return res.status(200).json(updated);
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to set default address", error: err.message });
+  }
+};
+
 const updateUserProfile = async (req, res) => {
   try {
     const user = await req.user;
@@ -74,5 +96,7 @@ module.exports = {
   getUserByEmail,
   updateUserProfile,
   addAddress,
+  updateAddress,
+  setDefaultAddress,
   deleteAddress,
 };

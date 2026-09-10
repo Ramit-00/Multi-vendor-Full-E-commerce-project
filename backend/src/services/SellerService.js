@@ -29,6 +29,8 @@ function formatSeller(seller) {
     role: 'ROLE_SELLER',
     accountStatus: seller.verificationStatus ? seller.verificationStatus.toUpperCase() : 'ACTIVE',
     verificationStatus: seller.verificationStatus || 'active',
+    tokenVersion: seller.tokenVersion ?? 0,
+    isDeleted: Boolean(seller.isDeleted),
     isEmailVerified: true,
     bankDetails: payout.bankDetails || {},
     businessDetails: payout.businessDetails || { businessName: seller.storeName },
@@ -236,9 +238,27 @@ class SellerService {
   }
 
   async deleteSeller(id) {
-    await prisma.seller.delete({
-      where: { id: String(id) },
-    });
+    try {
+      await prisma.seller.update({
+        where: { id: String(id) },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          verificationStatus: 'closed',
+          tokenVersion: { increment: 1 },
+        },
+      });
+      await prisma.product.updateMany({
+        where: { sellerId: String(id) },
+        data: { isDeleted: true, deletedAt: new Date(), status: 'INACTIVE' },
+      });
+    } catch (e) {
+      for (const [email, s] of this.fallbackSellers.entries()) {
+        if (String(s.id || s._id) === String(id)) {
+          this.fallbackSellers.delete(email);
+        }
+      }
+    }
   }
 
   async verifyEmail(email, otp) {
@@ -247,9 +267,17 @@ class SellerService {
   }
 
   async updateSellerAccountStatus(id, status) {
+    const norm = (status || '').toLowerCase();
+    const shouldRevoke = ['suspended', 'banned', 'closed', 'deactivated'].includes(norm);
+
+    const updateData = { verificationStatus: norm };
+    if (shouldRevoke) {
+      updateData.tokenVersion = { increment: 1 };
+    }
+
     const updated = await prisma.seller.update({
       where: { id: String(id) },
-      data: { verificationStatus: status.toLowerCase() },
+      data: updateData,
       include: { user: { include: { addresses: true } } },
     });
     return formatSeller(updated);

@@ -38,10 +38,16 @@ const sellerAuthMiddleware = async (req, res, next) => {
       return res.status(404).json({ message: "Seller not found with email " + email });
     }
 
-    if (seller.accountStatus === 'BANNED' || seller.accountStatus === 'CLOSED' || seller.accountStatus === 'SUSPENDED') {
+    if (seller.accountStatus === 'BANNED' || seller.accountStatus === 'CLOSED' || seller.accountStatus === 'SUSPENDED' || seller.isDeleted) {
       return res.status(403).json({
-        message: `Access denied: Your seller account is ${seller.accountStatus.toLowerCase()}. Contact platform support.`
+        message: `Access denied: Your seller account is ${seller.accountStatus ? seller.accountStatus.toLowerCase() : 'closed'}. Contact platform support.`
       });
+    }
+
+    if (payload.tokenVersion !== undefined && seller.tokenVersion !== undefined) {
+      if (payload.tokenVersion !== seller.tokenVersion) {
+        return res.status(401).json({ message: "Access denied: Session revoked or expired. Please login again." });
+      }
     }
 
     req.seller = seller;

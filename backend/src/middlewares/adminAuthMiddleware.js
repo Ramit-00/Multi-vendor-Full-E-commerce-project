@@ -38,8 +38,14 @@ const adminAuthMiddleware = async (req, res, next) => {
       return res.status(403).json({ message: "Access denied: Insufficient privileges" });
     }
 
-    if (admin.status === "BANNED" || admin.status === "SUSPENDED") {
+    if (admin.status === "BANNED" || admin.status === "SUSPENDED" || admin.isDeleted) {
       return res.status(403).json({ message: "Admin account is deactivated or suspended" });
+    }
+
+    if (payload.tokenVersion !== undefined && admin.tokenVersion !== undefined) {
+      if (payload.tokenVersion !== admin.tokenVersion) {
+        return res.status(401).json({ message: "Access denied: Session revoked or expired. Please login again." });
+      }
     }
 
     req.admin = admin;

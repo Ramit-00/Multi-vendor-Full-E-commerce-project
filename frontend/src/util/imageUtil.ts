@@ -25,4 +25,22 @@ export const normalizeImageUrl = (img?: string | null): string => {
   return PLACEHOLDER_SVG;
 };
 
+/**
+ * Injects automatic modern format selection (f_auto) and dynamic compression (q_auto)
+ * along with optional responsive width bounds to optimize Cloudinary asset delivery.
+ */
+export const getOptimizedCloudinaryUrl = (img?: string | null, width?: number): string => {
+  const url = normalizeImageUrl(img);
+  if (!url || !url.includes('res.cloudinary.com') || !url.includes('/upload/')) {
+    return url;
+  }
+  if (url.includes('/upload/f_auto') || url.includes('/upload/q_auto')) {
+    return url;
+  }
+
+  const transform = width ? `f_auto,q_auto,w_${width},c_limit` : `f_auto,q_auto`;
+  return url.replace('/upload/', `/upload/${transform}/`);
+};
+
 export const getDefaultPlaceholder = (): string => PLACEHOLDER_SVG;
+

@@ -1,23 +1,30 @@
-import './App.css';
-import { ThemeProvider, CssBaseline } from '@mui/material';
+import React, { Suspense, useEffect } from 'react';
+import { ThemeProvider, CssBaseline, Box, CircularProgress } from '@mui/material';
 import customeTheme from './Theme/customeTheme';
 
 import { Route, Routes } from 'react-router-dom';
 import ScrollToTop from './components/ScrollToTop';
 
-import SellerDashboard from './seller/pages/SellerDashboard/SellerDashboard';
 import CustomerRoutes from './routes/CustomerRoutes';
-import AdminDashboard from './admin/pages/Dashboard/Dashboard';
-import SellerAccountVerification from './seller/pages/SellerAccountVerification';
-import SellerAccountVerified from './seller/pages/SellerAccountVerified';
 import { useAppDispatch, useAppSelector } from './Redux Toolkit/Store';
-import { useEffect } from 'react';
 import { fetchSellerProfile } from './Redux Toolkit/Seller/sellerSlice';
-import BecomeSeller from './customer/pages/BecomeSeller/BecomeSeller';
-import AdminSecretGate from './admin/pages/Auth/AdminSecretGate';
 import AdminGuard from './admin/components/AdminGuard';
 import SellerGuard from './seller/components/SellerGuard';
 import { fetchUserProfile } from './Redux Toolkit/Customer/UserSlice';
+
+// Code-split heavy portals to optimize initial bundle size
+const SellerDashboard = React.lazy(() => import('./seller/pages/SellerDashboard/SellerDashboard'));
+const AdminDashboard = React.lazy(() => import('./admin/pages/Dashboard/Dashboard'));
+const AdminSecretGate = React.lazy(() => import('./admin/pages/Auth/AdminSecretGate'));
+const BecomeSeller = React.lazy(() => import('./customer/pages/BecomeSeller/BecomeSeller'));
+const SellerAccountVerification = React.lazy(() => import('./seller/pages/SellerAccountVerification'));
+const SellerAccountVerified = React.lazy(() => import('./seller/pages/SellerAccountVerified'));
+
+const PageLoader = () => (
+  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+    <CircularProgress sx={{ color: '#0F172A' }} />
+  </Box>
+);
 
 function App() {
   const dispatch = useAppDispatch();
@@ -46,36 +53,38 @@ function App() {
       <CssBaseline />
       <ScrollToTop />
       <div className="App">
-        <Routes>
-          {/* Protected Seller Portal */}
-          <Route
-            path="/seller/*"
-            element={
-              <SellerGuard>
-                <SellerDashboard />
-              </SellerGuard>
-            }
-          />
-          <Route path="/verify-seller/:otp" element={<SellerAccountVerification />} />
-          <Route path="/seller-account-verified" element={<SellerAccountVerified />} />
-          <Route path="/become-seller" element={<BecomeSeller />} />
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            {/* Protected Seller Portal */}
+            <Route
+              path="/seller/*"
+              element={
+                <SellerGuard>
+                  <SellerDashboard />
+                </SellerGuard>
+              }
+            />
+            <Route path="/verify-seller/:otp" element={<SellerAccountVerification />} />
+            <Route path="/seller-account-verified" element={<SellerAccountVerified />} />
+            <Route path="/become-seller" element={<BecomeSeller />} />
 
-          {/* High-Security Admin Hidden Gateway (Master Key Protected) */}
-          <Route path="/system-control-vault" element={<AdminSecretGate />} />
+            {/* High-Security Admin Hidden Gateway (Master Key Protected) */}
+            <Route path="/system-control-vault" element={<AdminSecretGate />} />
 
-          {/* Protected Admin Console */}
-          <Route
-            path="/admin/*"
-            element={
-              <AdminGuard>
-                <AdminDashboard />
-              </AdminGuard>
-            }
-          />
+            {/* Protected Admin Console */}
+            <Route
+              path="/admin/*"
+              element={
+                <AdminGuard>
+                  <AdminDashboard />
+                </AdminGuard>
+              }
+            />
 
-          {/* Customer & Marketplace Public Routes */}
-          <Route path="*" element={<CustomerRoutes />} />
-        </Routes>
+            {/* Customer & Marketplace Public Routes */}
+            <Route path="*" element={<CustomerRoutes />} />
+          </Routes>
+        </Suspense>
       </div>
     </ThemeProvider>
   );

@@ -239,25 +239,32 @@ class OrderService {
         );
 
         const orderId = await prisma.$transaction(async (tx) => {
-          // 1. Check stock and decrement atomically
+          // 1. Check stock and decrement atomically (prevent flash sale race conditions)
           for (const it of sellerItems) {
-            const currentStock = await tx.product.findUnique({
-              where: { id: it.product.id },
-              select: { id: true, stockQuantity: true, name: true },
+            const result = await tx.product.updateMany({
+              where: {
+                id: it.product.id,
+                stockQuantity: { gte: it.quantity },
+              },
+              data: {
+                stockQuantity: { decrement: it.quantity },
+              },
             });
 
-            if (!currentStock || currentStock.stockQuantity < it.quantity) {
+            if (result.count === 0) {
+              const currentStock = await tx.product.findUnique({
+                where: { id: it.product.id },
+                select: { stockQuantity: true, name: true },
+              });
               throw new OrderError(
                 `Insufficient stock for "${currentStock?.name || it.product.name}". Available: ${currentStock?.stockQuantity || 0}, Requested: ${it.quantity}`
               );
             }
 
-            await tx.product.update({
-              where: { id: it.product.id },
-              data: {
-                stockQuantity: { decrement: it.quantity },
-                status: currentStock.stockQuantity - it.quantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK',
-              },
+            // If stock reached 0, mark product status as OUT_OF_STOCK
+            await tx.product.updateMany({
+              where: { id: it.product.id, stockQuantity: { lte: 0 } },
+              data: { status: 'OUT_OF_STOCK' },
             });
           }
 
@@ -294,6 +301,26 @@ class OrderService {
               status: 'PENDING',
             },
           });
+
+          // 5. Record Coupon Redemption in PostgreSQL if coupon was applied
+          if (cart && cart.couponCode) {
+            try {
+              const coupon = await tx.coupon.findUnique({
+                where: { code: String(cart.couponCode).toUpperCase().trim() },
+              });
+              if (coupon) {
+                await tx.couponRedemption.create({
+                  data: {
+                    couponId: coupon.id,
+                    userId: dbUser.id,
+                    orderId: order.id,
+                  },
+                });
+              }
+            } catch (couponRedeemErr) {
+              console.warn('[OrderService] Coupon redemption record notice:', couponRedeemErr.message);
+            }
+          }
 
           return order.id;
         }, {

@@ -48,7 +48,9 @@ function formatUser(user) {
     phone: user.phone || '',
     role: toAppRole(user.role),
     accountType: user.role === 'ADMIN' ? 'ADMIN' : (user.role === 'SELLER' ? 'SELLER' : 'CUSTOMER'),
-    status: 'ACTIVE',
+    status: user.isDeleted ? 'BANNED' : 'ACTIVE',
+    tokenVersion: user.tokenVersion ?? 0,
+    isDeleted: Boolean(user.isDeleted),
     addresses,
     seller: user.seller || null,
     createdAt: user.createdAt,
@@ -302,6 +304,54 @@ class UserService {
     }
 
     return { message: 'Address deleted successfully', addressId };
+  }
+
+  async updateAddress(currentUser, addressId, updateData) {
+    const email = (currentUser?.email || '').toLowerCase().trim();
+    let userId = currentUser?.id || currentUser?._id;
+
+    if (!userId || String(userId).startsWith('offline_')) {
+      try {
+        const dbUser = await prisma.user.findUnique({ where: { email } });
+        if (dbUser) userId = dbUser.id;
+      } catch (e) {}
+    }
+
+    if (!userId) throw new UserError('User account not found to update address');
+
+    const dataToUpdate = {};
+    if (updateData.line1 || updateData.address) dataToUpdate.line1 = updateData.line1 || updateData.address;
+    if (updateData.line2 !== undefined || updateData.locality !== undefined) dataToUpdate.line2 = updateData.line2 ?? updateData.locality;
+    if (updateData.city) dataToUpdate.city = updateData.city;
+    if (updateData.state) dataToUpdate.state = updateData.state;
+    if (updateData.pincode || updateData.pinCode) dataToUpdate.pincode = String(updateData.pincode || updateData.pinCode);
+    if (updateData.isDefault !== undefined) dataToUpdate.isDefault = !!updateData.isDefault;
+
+    const updated = await prisma.address.update({
+      where: { id: String(addressId) },
+      data: dataToUpdate,
+    });
+
+    return formatAddress(updated, currentUser);
+  }
+
+  async setDefaultAddress(currentUser, addressId) {
+    let userId = currentUser?.id || currentUser?._id;
+    if (!userId) throw new UserError('User account not found');
+
+    // Clear previous default
+    await prisma.address.updateMany({
+      where: { userId: String(userId) },
+      data: { isDefault: false },
+    });
+
+    // Set new default
+    const updated = await prisma.address.update({
+      where: { id: String(addressId) },
+      data: { isDefault: true },
+    });
+
+    return formatAddress(updated, currentUser);
   }
 
   async getAllUsers() {

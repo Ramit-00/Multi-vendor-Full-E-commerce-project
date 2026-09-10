@@ -68,8 +68,33 @@ app.get('/health', async (req, res) => {
   });
 });
 
-app.use(bodyParser.json({ limit: '2mb' }));
+app.use(bodyParser.json({
+  limit: '2mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
+
+// Lightweight NoSQL Query & Input Sanitizer (protects MongoDB filters against $ and . injection)
+const sanitizeInput = (obj) => {
+  if (!obj || typeof obj !== 'object') return obj;
+  for (const key of Object.keys(obj)) {
+    if (key.startsWith('$') || key.includes('.')) {
+      delete obj[key];
+    } else if (typeof obj[key] === 'object') {
+      sanitizeInput(obj[key]);
+    }
+  }
+  return obj;
+};
+
+app.use((req, res, next) => {
+  if (req.body) sanitizeInput(req.body);
+  if (req.query) sanitizeInput(req.query);
+  if (req.params) sanitizeInput(req.params);
+  next();
+});
 
 const productRouters=require("./routers/productRoutes.js")
 const authRouters=require("./routers/authRouters.js")
@@ -91,6 +116,7 @@ const homeRouters=require("./routers/homeCategoryRoutes.js")
 const chatboatRouters=require("./routers/chatboatRoutes.js")
 const reviewRouters=require("./routers/reviewRouters.js")
 const notificationRouters=require("./routers/notificationRoutes.js")
+const payoutRouters=require("./routers/payoutRoutes.js")
 
 const { authLimiter, apiLimiter, chatbotLimiter } = require("./middleware/rateLimiter.js");
 
@@ -126,6 +152,7 @@ app.use("/api/sellers/revenue",revenueRouters)
 
 app.use("/api/reviews",reviewRouters)
 app.use("/api/notifications",notificationRouters)
+app.use("/api/payouts", payoutRouters)
 
 // AI Chatbot Rate Limiter (Gemini API quota protection)
 app.use("/chat", chatbotLimiter, chatboatRouters)
@@ -195,4 +222,8 @@ async function startServer() {
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
 
-startServer();
+module.exports = app;
+
+if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
+  startServer();
+}

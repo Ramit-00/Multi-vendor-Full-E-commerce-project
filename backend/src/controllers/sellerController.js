@@ -156,7 +156,12 @@ class SellerController {
         return res.status(400).json({ message: "Incorrect store password. Please verify your credentials or use Forgot Password." });
       }
 
-      const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
+      const token = jwtProvider.createJwt({
+        email: seller.email,
+        role: UserRoles.SELLER,
+        type: 'SELLER',
+        tokenVersion: seller.tokenVersion ?? 0,
+      });
 
       const sellerData = typeof seller.toObject === 'function' ? seller.toObject() : { ...seller };
       delete sellerData.password;
@@ -285,14 +290,25 @@ class SellerController {
       const hashedPassword = await bcrypt.hash(newPassword, 10);
       if (isDbConnected()) {
         seller.password = hashedPassword;
+        seller.tokenVersion = (seller.tokenVersion || 0) + 1;
         await seller.save();
         if (record) {
           await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
         }
       } else {
         seller.password = hashedPassword;
+        seller.tokenVersion = (seller.tokenVersion || 0) + 1;
         await VerificationService.deleteVerificationCode(normalizedEmail);
       }
+
+      // Also increment in Prisma if present
+      try {
+        const prisma = require('../config/prisma');
+        await prisma.seller.updateMany({
+          where: { user: { email: normalizedEmail } },
+          data: { tokenVersion: { increment: 1 } },
+        });
+      } catch (prismaErr) {}
 
       return res.status(200).json({
         success: true,
@@ -411,7 +427,12 @@ class SellerController {
       verifiedEmails.delete(normalizedEmail);
 
       // Generate JWT for direct authentication into Seller Dashboard
-      const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
+      const token = jwtProvider.createJwt({
+        email: seller.email,
+        role: UserRoles.SELLER,
+        type: 'SELLER',
+        tokenVersion: seller.tokenVersion ?? 0,
+      });
 
       return res.status(201).json({
         message: "Seller registered and activated successfully!",
@@ -476,7 +497,12 @@ class SellerController {
         if (mobile) await VerificationService.deleteVerificationCode(mobile);
       }
 
-      const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
+      const token = jwtProvider.createJwt({
+        email: seller.email,
+        role: UserRoles.SELLER,
+        type: 'SELLER',
+        tokenVersion: seller.tokenVersion ?? 0,
+      });
 
       return res.status(200).json({
         message: "Login Success",

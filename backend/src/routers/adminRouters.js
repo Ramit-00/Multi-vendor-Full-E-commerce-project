@@ -36,4 +36,9 @@ router.delete('/products/:productId', adminAuthMiddleware, adminController.delet
 // 7. Master Transactions Ledger
 router.get('/transactions', adminAuthMiddleware, adminController.getAllTransactions);
 
+// 8. Refunds & Dispute Management
+router.get('/refunds', adminAuthMiddleware, adminController.getAllRefunds);
+router.put('/refunds/:refundId/approve', adminAuthMiddleware, adminController.approveRefund);
+router.put('/refunds/:refundId/reject', adminAuthMiddleware, adminController.rejectRefund);
+
 module.exports = router;

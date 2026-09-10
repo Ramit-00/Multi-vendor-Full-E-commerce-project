@@ -80,6 +80,35 @@ class AuthController {
             return res.status(500).json({ error: "Internal Server Error" });
         }
     }
+
+    async sendForgotPasswordOtp(req, res) {
+        try {
+            const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+            if (!email) {
+                return res.status(400).json({ error: 'Registered email address is required' });
+            }
+            const result = await AuthService.sendForgotPasswordOtp(email);
+            return res.status(200).json(result);
+        } catch (error) {
+            if (error instanceof UserError || error instanceof Error) {
+                return res.status(error.statusCode || 400).json({ error: error.message });
+            }
+            return res.status(500).json({ error: "Internal Server Error" });
+        }
+    }
+
+    async resetForgotPassword(req, res) {
+        try {
+            const { email, otp, newPassword } = req.body;
+            const result = await AuthService.resetForgotPassword(email, otp, newPassword);
+            return res.status(200).json(result);
+        } catch (error) {
+            if (error instanceof UserError || error instanceof Error) {
+                return res.status(error.statusCode || 400).json({ error: error.message });
+            }
+            return res.status(500).json({ error: "Internal Server Error" });
+        }
+    }
 }
 
 module.exports = new AuthController();

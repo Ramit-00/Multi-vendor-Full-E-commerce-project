@@ -12,10 +12,13 @@ function formatCoupon(coupon) {
     discountPercentage: isPercent ? Number(coupon.discountValue) : 10,
     discountValue: Number(coupon.discountValue),
     discountType: coupon.discountType,
+    minOrderValue: coupon.minOrderValue ? Number(coupon.minOrderValue) : 0,
+    minimumOrderValue: coupon.minOrderValue ? Number(coupon.minOrderValue) : 0,
+    maxDiscount: coupon.maxDiscount ? Number(coupon.maxDiscount) : null,
+    perUserLimit: coupon.perUserLimit || 1,
     usesLeft: coupon.usesLeft,
     validityEndDate: coupon.expiryDate,
     expiryDate: coupon.expiryDate,
-    minimumOrderValue: 0,
     active: coupon.usesLeft > 0 && new Date() <= coupon.expiryDate,
     createdAt: coupon.createdAt,
   };
@@ -52,12 +55,34 @@ const couponService = {
         throw new CouponNotValidException('Active shopping cart not found');
       }
 
+      // Validate minimum order value
+      if (coupon.minOrderValue && cart.totalSellingPrice < Number(coupon.minOrderValue)) {
+        throw new CouponNotValidException(
+          `Minimum order value of ₹${Number(coupon.minOrderValue)} required to apply this coupon`
+        );
+      }
+
+      // Validate per-user redemption limit
+      const userRedemptions = await prisma.couponRedemption.count({
+        where: { couponId: coupon.id, userId },
+      });
+      if (userRedemptions >= (coupon.perUserLimit || 1)) {
+        throw new CouponNotValidException(
+          `You have already reached the maximum usage limit (${coupon.perUserLimit || 1}) for this coupon`
+        );
+      }
+
       // Calculate discount
       let discount = 0;
       if (coupon.discountType === 'PERCENTAGE') {
         discount = Math.round((cart.totalSellingPrice * Number(coupon.discountValue)) / 100);
       } else {
         discount = Math.min(cart.totalSellingPrice, Number(coupon.discountValue));
+      }
+
+      // Cap discount if maxDiscount is specified
+      if (coupon.maxDiscount && discount > Number(coupon.maxDiscount)) {
+        discount = Number(coupon.maxDiscount);
       }
 
       // Atomically decrement coupon uses
@@ -110,6 +135,11 @@ const couponService = {
       const code = String(couponData.code || `COUPON_${Date.now()}`).toUpperCase().trim();
       const discountValue = Number(couponData.discountPercentage || couponData.discountValue || 10);
       const discountType = couponData.discountType || 'PERCENTAGE';
+      const minOrderValue = couponData.minOrderValue || couponData.minimumOrderValue
+        ? Number(couponData.minOrderValue || couponData.minimumOrderValue)
+        : 0;
+      const maxDiscount = couponData.maxDiscount ? Number(couponData.maxDiscount) : null;
+      const perUserLimit = couponData.perUserLimit ? Number(couponData.perUserLimit) : 1;
       const usesLeft = Number(couponData.usesLeft || couponData.maxUses || 100);
       const expiryDate = couponData.validityEndDate || couponData.expiryDate
         ? new Date(couponData.validityEndDate || couponData.expiryDate)
@@ -120,6 +150,9 @@ const couponService = {
           code,
           discountType,
           discountValue,
+          minOrderValue,
+          maxDiscount,
+          perUserLimit,
           usesLeft,
           expiryDate,
         },

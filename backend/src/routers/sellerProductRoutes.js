@@ -15,6 +15,25 @@ router.post(
   productController.createProduct
 );
 
+router.post(
+  "/bulk-create",
+  sellerAuthMiddleware,
+  productController.bulkCreateProducts
+);
+
+router.get(
+  "/export",
+  sellerAuthMiddleware,
+  productController.exportSellerProducts
+);
+
+const cloudinaryController = require("../controllers/cloudinaryController");
+router.post(
+  "/cloudinary-sign",
+  sellerAuthMiddleware,
+  cloudinaryController.getUploadSignature
+);
+
 router.delete(
   "/:productId",
   sellerAuthMiddleware,

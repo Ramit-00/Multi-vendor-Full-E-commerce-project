@@ -114,6 +114,9 @@ temp/
 tmp/
 product-images/
 */product-images/
+product images/
+*/product images/
+**/product images/
 
 # =======================================================
 # Alternate Package Manager Lockfiles (Repo uses npm)

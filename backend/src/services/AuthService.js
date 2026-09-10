@@ -39,7 +39,9 @@ function formatUserForResponse(user) {
     phone: user.phone || '',
     role: toAppRole(user.role),
     accountType: user.role === 'ADMIN' ? 'ADMIN' : (user.role === 'SELLER' ? 'SELLER' : 'CUSTOMER'),
-    status: 'ACTIVE',
+    status: user.isDeleted ? 'BANNED' : 'ACTIVE',
+    tokenVersion: user.tokenVersion ?? 0,
+    isDeleted: Boolean(user.isDeleted),
     addresses: (user.addresses || []).map(a => ({
       id: a.id,
       _id: a.id,
@@ -262,7 +264,12 @@ class AuthService {
     const formatted = formatUserForResponse(createdUser);
     this.setFallbackUser(email, formatted);
 
-    const token = jwtProvider.createJwt({ email, role: 'ROLE_CUSTOMER', type: 'CUSTOMER' });
+    const token = jwtProvider.createJwt({
+      email,
+      role: 'ROLE_CUSTOMER',
+      type: 'CUSTOMER',
+      tokenVersion: createdUser.tokenVersion ?? 0,
+    });
     return token;
   }
 
@@ -346,7 +353,12 @@ class AuthService {
         verificationStatus: sellerObj?.verificationStatus || 'active',
       };
 
-      const token = jwtProvider.createJwt({ email: user.email, role: 'ROLE_SELLER', type: 'SELLER' });
+      const token = jwtProvider.createJwt({
+        email: user.email,
+        role: 'ROLE_SELLER',
+        type: 'SELLER',
+        tokenVersion: (sellerObj?.tokenVersion ?? user.tokenVersion) ?? 0,
+      });
       return {
         message: "Login Success",
         jwt: token,
@@ -363,6 +375,7 @@ class AuthService {
       email,
       role: formattedUser.role || 'ROLE_CUSTOMER',
       type: 'CUSTOMER',
+      tokenVersion: user.tokenVersion ?? 0,
     });
 
     return {
@@ -428,7 +441,12 @@ class AuthService {
     const formatted = formatUserForResponse(user);
     this.setFallbackUser(email, formatted);
 
-    const token = jwtProvider.createJwt({ email, role: 'ROLE_CUSTOMER', type: 'CUSTOMER' });
+    const token = jwtProvider.createJwt({
+      email,
+      role: 'ROLE_CUSTOMER',
+      type: 'CUSTOMER',
+      tokenVersion: user.tokenVersion ?? 0,
+    });
 
     return {
       message: "Login Success",
@@ -436,6 +454,103 @@ class AuthService {
       role: 'ROLE_CUSTOMER',
       isSeller: false,
       user: formatted,
+    };
+  }
+
+  async sendForgotPasswordOtp(email) {
+    const normalized = (email || '').toLowerCase().trim();
+    this._validateEmail(normalized);
+
+    let user = null;
+    try {
+      user = await prisma.user.findUnique({ where: { email: normalized } });
+    } catch (e) {}
+
+    if (!user) {
+      user = this.getFallbackUser(normalized);
+    }
+
+    if (!user) {
+      throw new UserError("No customer account found with this email.");
+    }
+
+    const otp = generateOTP();
+    const verificationCode = new VerificationCode({
+      otp,
+      email: normalized,
+    });
+    try {
+      await verificationCode.save();
+    } catch (e) {
+      this.fallbackStore.set(normalized, { otp, email: normalized, createdAt: new Date() });
+    }
+    this.fallbackStore.set(normalized, { otp, email: normalized, createdAt: new Date() });
+
+    const subject = "Reset Your Customer Password - E-COM";
+    const body = `Your verification code to reset your account password is: ${otp}. This code expires in 10 minutes.`;
+
+    const emailResult = await sendVerificationEmail(normalized, subject, body, { otp });
+
+    return {
+      message: "Password reset verification code has been sent to your email.",
+      email: normalized,
+      mailSent: Boolean(emailResult && emailResult.mailSent),
+    };
+  }
+
+  async resetForgotPassword(email, otp, newPassword) {
+    const normalized = (email || '').toLowerCase().trim();
+    if (!normalized || !otp || !newPassword) {
+      throw new UserError("Email, 6-digit OTP, and new password are required.");
+    }
+    if (newPassword.length < 6) {
+      throw new UserError("Password must be at least 6 characters long.");
+    }
+
+    let record;
+    try {
+      record = await VerificationCode.findOne({ email: normalized });
+    } catch (e) {
+      record = this.fallbackStore.get(normalized);
+    }
+    if (!record) {
+      record = this.fallbackStore.get(normalized);
+    }
+
+    const isValid = Boolean(record && record.otp === otp);
+    if (!isValid) {
+      throw new UserError("Invalid or expired OTP. Please check your email and try again.");
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    try {
+      await prisma.user.update({
+        where: { email: normalized },
+        data: {
+          passwordHash: hashedPassword,
+          tokenVersion: { increment: 1 },
+        },
+      });
+    } catch (dbErr) {
+      console.warn('[AuthService] Reset password DB notice:', dbErr.message);
+      const fallback = this.getFallbackUser(normalized);
+      if (fallback) {
+        fallback.tokenVersion = (fallback.tokenVersion || 0) + 1;
+        this.setFallbackUser(normalized, fallback);
+      }
+    }
+
+    try {
+      if (record && record._id) {
+        await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
+      }
+    } catch (e) {}
+    this.fallbackStore.delete(normalized);
+
+    return {
+      success: true,
+      message: "Password reset successfully! Please sign in with your new password.",
     };
   }
 }
