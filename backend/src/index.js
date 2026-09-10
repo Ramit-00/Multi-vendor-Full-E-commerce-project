@@ -56,6 +56,14 @@ app.get('/health', async (req, res) => {
   const mongoose = require('mongoose');
   mongoStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
 
+  let redisHealth = { status: 'unconfigured', latencyMs: 0 };
+  try {
+    const { checkRedisHealth } = require('./config/redis');
+    redisHealth = await checkRedisHealth();
+  } catch (rErr) {
+    redisHealth = { status: 'offline', error: rErr.message };
+  }
+
   const isHealthy = pgStatus === 'connected' && (mongoStatus === 'connected' || process.env.ALLOW_OFFLINE === 'true');
   res.status(isHealthy ? 200 : 503).json({
     status: isHealthy ? 'healthy' : 'degraded',
@@ -63,7 +71,9 @@ app.get('/health', async (req, res) => {
     databases: {
       postgresql: pgStatus,
       mongodb: mongoStatus,
+      redis: redisHealth.status,
     },
+    redisLatencyMs: redisHealth.latencyMs || 0,
     uptime: process.uptime(),
   });
 });

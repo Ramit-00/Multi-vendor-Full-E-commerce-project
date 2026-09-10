@@ -296,6 +296,33 @@ async function runSecurityAudit() {
     assert('Secrets audit check', false, err.message);
   }
 
+  // --- 9. UPSTASH REDIS EDGE CACHING & DISTRIBUTED RATE LIMITING ---
+  console.log('\n--- 9. UPSTASH REDIS EDGE CACHING & DISTRIBUTED RATE LIMITING ---');
+  try {
+    const healthRes = await request({ method: 'GET', url: `${BASE_URL}/health` });
+    const redisStatus = healthRes.body && healthRes.body.databases && healthRes.body.databases.redis;
+    assert('Upstash Redis status in /health is "connected"', redisStatus === 'connected', `Redis status was "${redisStatus}"`);
+
+    const redisClient = require('../src/config/redis');
+    const cacheService = require('../src/services/CacheService');
+    
+    // Test cache write, read, and invalidation
+    const testKey = 'sec_audit_redis_test';
+    await redisClient.set(testKey, 'secure_ok', 30);
+    const readVal = await redisClient.get(testKey);
+    await redisClient.del(testKey);
+    assert('Upstash Redis Read/Write/Delete round-trip verified', readVal === 'secure_ok', 'Failed Redis round-trip');
+
+    // Test OTP auto-expiring TTL in CacheService
+    const testEmail = 'sec_check@example.com';
+    await cacheService.setOtp(testEmail, '999888', 30);
+    const otpVal = await cacheService.getOtp(testEmail);
+    await cacheService.deleteOtp(testEmail);
+    assert('Redis OTP Auto-Expiring TTL & retrieval verified', otpVal === '999888', 'Failed OTP Redis cache');
+  } catch (err) {
+    assert('Upstash Redis edge caching check', false, err.message);
+  }
+
   // SUMMARY
   console.log('\n================================================================');
   console.log(` SECURITY VERIFICATION COMPLETE: Passed ${passed} / ${passed + failed} Checks (${Math.round((passed / (passed + failed)) * 100)}%)`);

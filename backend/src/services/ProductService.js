@@ -6,6 +6,7 @@ const prisma = require('../config/prisma');
 const ProductDetails = require('../models/ProductDetails');
 const Category = require('../models/Category');
 const ProductError = require('../exceptions/ProductError');
+const cacheService = require('./CacheService');
 
 let cloudinaryImageMap = {};
 try {
@@ -229,9 +230,16 @@ class ProductService {
   }
 
   async findProductById(productId) {
+    // Check Redis cache first
+    const cached = await cacheService.getProduct(productId);
+    if (cached) return cached;
+
     const samples = this._getAllCategoryProducts();
     const match = samples.find(p => p._id === productId || p.id === productId);
-    if (match) return match;
+    if (match) {
+      await cacheService.setProduct(productId, match, 600);
+      return match;
+    }
 
     try {
       // 1. Search PostgreSQL by UUID, sku, or mongoDetailsId
@@ -273,7 +281,12 @@ class ProductService {
           } catch (e) {}
         }
 
-        return this._formatFullProduct(core, details, category);
+        const formatted = this._formatFullProduct(core, details, category);
+        await cacheService.setProduct(productId, formatted, 600);
+        if (formatted.id && String(formatted.id) !== String(productId)) {
+          await cacheService.setProduct(formatted.id, formatted, 600);
+        }
+        return formatted;
       }
     } catch (err) {
       if (err instanceof ProductError) throw err;
@@ -342,6 +355,11 @@ class ProductService {
         await details.save();
       }
 
+      await cacheService.invalidateProduct(productId);
+      if (updatedCore.id && String(updatedCore.id) !== String(productId)) {
+        await cacheService.invalidateProduct(updatedCore.id);
+      }
+
       return this._formatFullProduct(updatedCore, details);
     } catch (error) {
       throw new ProductError(error.message);
@@ -406,6 +424,11 @@ class ProductService {
             $or: [{ productId: core.id }, ...(core.mongoDetailsId ? [{ _id: core.mongoDetailsId }] : [])],
           });
         } catch (e) {}
+
+        await cacheService.invalidateProduct(productId);
+        if (core.id && String(core.id) !== String(productId)) {
+          await cacheService.invalidateProduct(core.id);
+        }
       }
     } catch (error) {
       throw new ProductError(error.message);
@@ -592,6 +615,10 @@ class ProductService {
   }
 
   async getAllProducts(req = {}) {
+    const queryHash = cacheService.hashQuery(req);
+    const cachedCatalog = await cacheService.getCatalog(queryHash);
+    if (cachedCatalog) return cachedCatalog;
+
     const requestedCategory = (req.category || '').toLowerCase().trim();
     let dbProducts = [];
 
@@ -694,11 +721,13 @@ class ProductService {
     const pageNumber = parseInt(req.pageNumber) || 0;
     const paginated = combined.slice(pageNumber * pageSize, (pageNumber + 1) * pageSize);
 
-    return {
+    const result = {
       content: paginated,
       totalPages: Math.ceil(combined.length / pageSize) || (combined.length === 0 ? 0 : 1),
       totalElements: combined.length,
     };
+    await cacheService.setCatalog(queryHash, result, 300);
+    return result;
   }
 
   async searchProduct(query) {

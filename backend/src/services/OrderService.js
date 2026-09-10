@@ -341,6 +341,16 @@ class OrderService {
         createdOrders.push(formatOrder(fullOrder));
       }
 
+      // Invalidate catalog and ordered product caches so fresh stock is served
+      try {
+        const cacheService = require('./CacheService');
+        await cacheService.invalidateCatalog();
+        for (const it of cartItems) {
+          const pId = it.product?.id || it.product?._id;
+          if (pId) await cacheService.invalidateProduct(pId);
+        }
+      } catch (cacheErr) {}
+
       return createdOrders;
     } catch (error) {
       console.error("[OrderService] checkout transaction error:", error.message);

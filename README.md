@@ -136,6 +136,10 @@ GOOGLE_CLIENT_ID="your_google_client_id"
 RAZORPAY_KEY_ID="your_razorpay_key_id"
 RAZORPAY_KEY_SECRET="your_razorpay_key_secret"
 STRIPE_SECRET_KEY="your_stripe_secret_key"
+
+# Upstash Redis (Edge Caching & Distributed Rate Limiting)
+UPSTASH_REDIS_REST_URL="https://your-database.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="your_upstash_redis_token"
 ```
 
 #### 2. Frontend (`frontend/.env`)

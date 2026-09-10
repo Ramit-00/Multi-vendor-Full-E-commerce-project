@@ -11,6 +11,7 @@ const VerificationCode = require('../models/VerificationCode');
 const Cart = require('../models/Cart');
 const jwtProvider = require('../utils/jwtProvider');
 const UserError = require('../exceptions/UserError');
+const cacheService = require('./CacheService');
 
 const OFFLINE_CACHE_FILE = path.join(__dirname, '..', '..', '.offline_cache.json');
 
@@ -157,7 +158,12 @@ class AuthService {
     // Generate 6-digit OTP
     const otp = generateOTP();
 
-    // Save OTP
+    // Save OTP to Redis with 10-minute auto-expiry TTL
+    try {
+      await cacheService.setOtp(cleanEmail, otp, 600);
+    } catch (redisErr) {}
+
+    // Save OTP to MongoDB / fallback store
     try {
       const verificationCode = new VerificationCode({ otp, email: cleanEmail });
       await verificationCode.save();
@@ -204,28 +210,42 @@ class AuthService {
 
     this._validateEmail(email);
 
-    let verificationCode;
-    try {
-      verificationCode = await VerificationCode.findOne({ email });
-    } catch (e) {
-      verificationCode = this.fallbackStore.get(email);
-    }
-    if (!verificationCode) {
-      verificationCode = this.fallbackStore.get(email);
-    }
-
-    const OTP_TTL_MS = 10 * 60 * 1000;
-    if (!verificationCode) {
-      throw new UserError("Incorrect credentials");
-    }
-
-    if (verificationCode.createdAt && Date.now() - new Date(verificationCode.createdAt).getTime() > OTP_TTL_MS) {
+    let validOtp = false;
+    const redisOtp = await cacheService.getOtp(email);
+    if (redisOtp && String(redisOtp) === String(otp)) {
+      validOtp = true;
+      await cacheService.deleteOtp(email);
+      await VerificationCode.deleteMany({ email }).catch(() => {});
       this.fallbackStore.delete(email);
-      throw new UserError("OTP expired. Please request a new code.");
     }
 
-    if (verificationCode.otp !== otp) {
-      throw new UserError("Incorrect credentials");
+    if (!validOtp) {
+      let verificationCode;
+      try {
+        verificationCode = await VerificationCode.findOne({ email });
+      } catch (e) {
+        verificationCode = this.fallbackStore.get(email);
+      }
+      if (!verificationCode) {
+        verificationCode = this.fallbackStore.get(email);
+      }
+
+      const OTP_TTL_MS = 10 * 60 * 1000;
+      if (!verificationCode) {
+        throw new UserError("Incorrect credentials");
+      }
+
+      if (verificationCode.createdAt && Date.now() - new Date(verificationCode.createdAt).getTime() > OTP_TTL_MS) {
+        this.fallbackStore.delete(email);
+        throw new UserError("OTP expired. Please request a new code.");
+      }
+
+      if (verificationCode.otp !== otp) {
+        throw new UserError("Incorrect credentials");
+      }
+
+      await VerificationCode.deleteMany({ email }).catch(() => {});
+      this.fallbackStore.delete(email);
     }
 
     // Check if user already exists in PostgreSQL
@@ -314,28 +334,42 @@ class AuthService {
     }
 
     // 2. Validate OTP
-    let verificationCode;
-    try {
-      verificationCode = await VerificationCode.findOne({ email });
-    } catch (e) {
-      verificationCode = this.fallbackStore.get(email);
-    }
-    if (!verificationCode) {
-      verificationCode = this.fallbackStore.get(email);
-    }
-
-    const OTP_TTL_MS = 10 * 60 * 1000;
-    if (!verificationCode) {
-      throw new UserError("Incorrect credentials");
-    }
-
-    if (verificationCode.createdAt && Date.now() - new Date(verificationCode.createdAt).getTime() > OTP_TTL_MS) {
+    let validOtp = false;
+    const redisOtp = await cacheService.getOtp(email);
+    if (redisOtp && String(redisOtp) === String(otp)) {
+      validOtp = true;
+      await cacheService.deleteOtp(email);
+      await VerificationCode.deleteMany({ email }).catch(() => {});
       this.fallbackStore.delete(email);
-      throw new UserError("Incorrect credentials");
     }
 
-    if (verificationCode.otp !== otp) {
-      throw new UserError("Incorrect credentials");
+    if (!validOtp) {
+      let verificationCode;
+      try {
+        verificationCode = await VerificationCode.findOne({ email });
+      } catch (e) {
+        verificationCode = this.fallbackStore.get(email);
+      }
+      if (!verificationCode) {
+        verificationCode = this.fallbackStore.get(email);
+      }
+
+      const OTP_TTL_MS = 10 * 60 * 1000;
+      if (!verificationCode) {
+        throw new UserError("Incorrect credentials");
+      }
+
+      if (verificationCode.createdAt && Date.now() - new Date(verificationCode.createdAt).getTime() > OTP_TTL_MS) {
+        this.fallbackStore.delete(email);
+        throw new UserError("Incorrect credentials");
+      }
+
+      if (verificationCode.otp !== otp) {
+        throw new UserError("Incorrect credentials");
+      }
+
+      await VerificationCode.deleteMany({ email }).catch(() => {});
+      this.fallbackStore.delete(email);
     }
 
     // If Seller account
