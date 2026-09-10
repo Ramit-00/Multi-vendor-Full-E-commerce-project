@@ -7,6 +7,9 @@ const cors = require('cors');
 
 const app = express();
 
+// Trust reverse proxy headers (e.g. Vercel, Cloudflare, Nginx, AWS)
+app.set('trust proxy', 1);
+
 // Allowed Origins Whitelist
 const allowedOrigins = [
   process.env.FRONTEND_URL,

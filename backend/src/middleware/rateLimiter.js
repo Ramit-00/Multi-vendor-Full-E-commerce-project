@@ -61,6 +61,14 @@ class UpstashRateLimitStore {
   }
 }
 
+const getClientIp = (req) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded && typeof forwarded === 'string') {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || '127.0.0.1';
+};
+
 const createStore = (prefix) => {
   if (isConfigured && redis) {
     return new UpstashRateLimitStore({ prefix, redis });
@@ -74,6 +82,7 @@ const authLimiter = rateLimit({
   max: 30, // Limit each IP to 30 authentication requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
   store: createStore('rl:auth:'),
   message: {
     message: 'Too many authentication attempts from this IP, please try again after 15 minutes.',
@@ -87,6 +96,7 @@ const apiLimiter = rateLimit({
   max: 1000, // Limit each IP to 1000 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
   store: createStore('rl:api:'),
   message: {
     message: 'Too many requests from this IP, please try again later.',
@@ -100,6 +110,7 @@ const chatbotLimiter = rateLimit({
   max: 30, // Limit each IP to 30 chatbot requests per minute
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
   store: createStore('rl:chat:'),
   message: {
     message: 'Chatbot rate limit exceeded. Please wait a minute before asking more questions.',
