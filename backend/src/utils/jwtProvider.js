@@ -1,8 +1,8 @@
 // utils/JwtProvider.js
 const jwt = require('jsonwebtoken');
-const SECERET_KEY=process.env.SECERET_KEY
+const SECERET_KEY = process.env.SECRET_KEY || process.env.SECERET_KEY;
 if (!SECERET_KEY) {
-    console.error('WARNING: JWT secret (SECERET_KEY) is not set in environment. JWT operations will fail.');
+    console.error('WARNING: JWT secret (SECRET_KEY or SECERET_KEY) is not set in environment. JWT operations will fail.');
 }
 class JwtProvider {
     constructor(secretKey) {

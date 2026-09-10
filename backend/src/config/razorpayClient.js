@@ -1,13 +1,11 @@
 const Razorpay = require('razorpay');
 
-apiKey="provide your api key"
-apiSecret="provide your secret key"
-
+const keyId = process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_API_KEY || 'rzp_test_placeholder';
+const keySecret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || 'rzp_secret_placeholder';
 
 const razorpay = new Razorpay({
-    key_id: apiKey,
-    key_secret: apiSecret,
-  });
+  key_id: keyId,
+  key_secret: keySecret,
+});
 
-
-  module.exports = razorpay;
+module.exports = razorpay;

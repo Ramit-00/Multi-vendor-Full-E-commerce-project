@@ -7,6 +7,13 @@ const jwtProvider = require("../utils/jwtProvider");
 const UserRoles = require("../domain/UserRole");
 const OrderStatus = require("../domain/OrderStatus");
 
+let cloudinaryImageMap = {};
+try {
+  cloudinaryImageMap = require("../config/cloudinaryImageMap.json");
+} catch (e) {
+  cloudinaryImageMap = {};
+}
+
 class AdminController {
   // Master Secret Key Admin Authentication
   async adminLogin(req, res) {
@@ -193,10 +200,14 @@ class AdminController {
         return res.status(400).json({ message: "Invalid status value" });
       }
 
-      const user = await UserService.findUserById(id);
+      const updatedUser = await prisma.user.update({
+        where: { id: String(id) },
+        data: { status },
+      });
+
       return res.status(200).json({
         message: `User status successfully updated to ${status}`,
-        user: { ...user, status },
+        user: { ...updatedUser, status },
       });
     } catch (error) {
       return res.status(500).json({ message: "Failed to update user status", error: error.message });
@@ -263,6 +274,21 @@ class AdminController {
       const { status } = req.body;
 
       const seller = await SellerService.updateSellerAccountStatus(id, status);
+
+      // Cascade status to all seller products
+      const normalizedStatus = (status || '').toUpperCase();
+      if (['SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(normalizedStatus)) {
+        await prisma.product.updateMany({
+          where: { sellerId: String(id) },
+          data: { status: 'INACTIVE' },
+        });
+      } else if (normalizedStatus === 'ACTIVE') {
+        await prisma.product.updateMany({
+          where: { sellerId: String(id), status: 'INACTIVE' },
+          data: { status: 'ACTIVE' },
+        });
+      }
+
       return res.status(200).json({
         message: `Seller account status updated to ${status}`,
         seller,
@@ -336,13 +362,15 @@ class AdminController {
   async getAllProducts(req, res) {
     try {
       const result = await ProductService.getAllProducts(req.query);
-      const host = req.get("host");
-      const protocol = req.protocol;
       const mapImage = (img) => {
-        if (!img) return img;
-        if (img.startsWith("http://") || img.startsWith("https://")) return img;
-        const parts = img.split("/").map(encodeURIComponent).join("/");
-        return `${protocol}://${host}/product-images/${parts}`;
+        if (!img || typeof img !== "string") return img;
+        if (img.startsWith("http://") || img.startsWith("https://") || img.startsWith("data:")) return img;
+        if (cloudinaryImageMap[img]) return cloudinaryImageMap[img];
+        if (cloudinaryImageMap[img.toLowerCase()]) return cloudinaryImageMap[img.toLowerCase()];
+        const basename = img.split(/[/\\]/).pop();
+        if (cloudinaryImageMap[basename]) return cloudinaryImageMap[basename];
+        if (cloudinaryImageMap[basename.toLowerCase()]) return cloudinaryImageMap[basename.toLowerCase()];
+        return img;
       };
 
       const formatted = (result.content || []).map((p) => ({

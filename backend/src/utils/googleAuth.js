@@ -1,4 +1,4 @@
-﻿const { OAuth2Client } = require('google-auth-library');
+const { OAuth2Client } = require('google-auth-library');
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '419260446565-cl1c50pj66oos65k7uo87va62enhivit.apps.googleusercontent.com';
 const client = new OAuth2Client(CLIENT_ID);
@@ -15,8 +15,8 @@ async function verifyGoogleIdToken(token) {
     throw new Error('Google credential token is required');
   }
 
-  // Support local test mock tokens for offline and automated backend test suites
-  if (typeof token === 'string' && token.startsWith('mock_google_token:')) {
+  // Only permit mock tokens in explicit isolated automated unit test runner
+  if (process.env.NODE_ENV === 'test' && process.env.ALLOW_TEST_MOCKS === 'true' && typeof token === 'string' && token.startsWith('mock_google_token:')) {
     const parts = token.split(':');
     const mockEmail = parts[1] || 'mockuser@example.com';
     const mockName = parts[2] || 'Mock Google User';

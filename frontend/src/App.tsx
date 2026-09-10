@@ -16,9 +16,8 @@ import { fetchSellerProfile } from './Redux Toolkit/Seller/sellerSlice';
 import BecomeSeller from './customer/pages/BecomeSeller/BecomeSeller';
 import AdminSecretGate from './admin/pages/Auth/AdminSecretGate';
 import AdminGuard from './admin/components/AdminGuard';
+import SellerGuard from './seller/components/SellerGuard';
 import { fetchUserProfile } from './Redux Toolkit/Customer/UserSlice';
-import { createHomeCategories } from './Redux Toolkit/Customer/Customer/AsyncThunk';
-import { homeCategories } from './data/homeCategories';
 
 function App() {
   const dispatch = useAppDispatch();
@@ -42,18 +41,21 @@ function App() {
     }
   }, [auth.jwt, sellerAuth.jwt, dispatch]);
 
-  useEffect(() => {
-    dispatch(createHomeCategories(homeCategories));
-  }, [dispatch]);
-
   return (
     <ThemeProvider theme={customeTheme}>
       <CssBaseline />
       <ScrollToTop />
       <div className="App">
         <Routes>
-          {/* Seller Portal */}
-          <Route path="/seller/*" element={<SellerDashboard />} />
+          {/* Protected Seller Portal */}
+          <Route
+            path="/seller/*"
+            element={
+              <SellerGuard>
+                <SellerDashboard />
+              </SellerGuard>
+            }
+          />
           <Route path="/verify-seller/:otp" element={<SellerAccountVerification />} />
           <Route path="/seller-account-verified" element={<SellerAccountVerified />} />
           <Route path="/become-seller" element={<BecomeSeller />} />

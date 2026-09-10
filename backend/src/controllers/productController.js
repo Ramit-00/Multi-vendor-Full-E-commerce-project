@@ -3,20 +3,30 @@ const { createProductSchema } = require("../validators/productValidators");
 const Yup = require("yup");
 const path = require('path');
 
+let cloudinaryImageMap = {};
+try {
+  cloudinaryImageMap = require("../config/cloudinaryImageMap.json");
+} catch (e) {
+  cloudinaryImageMap = {};
+}
+
+function mapImage(img) {
+  if (!img || typeof img !== "string") return img;
+  if (img.startsWith("http://") || img.startsWith("https://") || img.startsWith("data:")) return img;
+  if (cloudinaryImageMap[img]) return cloudinaryImageMap[img];
+  if (cloudinaryImageMap[img.toLowerCase()]) return cloudinaryImageMap[img.toLowerCase()];
+  const basename = img.split(/[/\\]/).pop();
+  if (cloudinaryImageMap[basename]) return cloudinaryImageMap[basename];
+  if (cloudinaryImageMap[basename.toLowerCase()]) return cloudinaryImageMap[basename.toLowerCase()];
+  return img;
+}
+
 class SellerProductController {
   async getProductBySellerId(req, res) {
     try {
       const seller = await req.seller;
 
       const products = await ProductService.getProductBySellerId(seller._id);
-      const host = req.get('host');
-      const protocol = req.protocol;
-      const mapImage = (img) => {
-        if (!img) return img;
-        if (img.startsWith('http://') || img.startsWith('https://')) return img;
-        const parts = img.split('/').map(encodeURIComponent).join('/');
-        return `${protocol}://${host}/product-images/${parts}`;
-      };
       const mapped = products.map(p => ({ ...p.toObject(), images: (p.images || []).map(mapImage) }));
       res.status(200).json(mapped);
     } catch (error) {
@@ -52,24 +62,29 @@ class SellerProductController {
   // Delete a product
   async deleteProduct(req, res) {
     try {
-      await ProductService.deleteProduct(req.params.productId);
+      const sellerId = req.seller ? (req.seller.id || req.seller._id) : null;
+      await ProductService.deleteProduct(req.params.productId, sellerId);
       res.status(200).json({ message: "Product deleted successfully" });
     } catch (error) {
-      res.status(404).json({ error: error.message });
+      const statusCode = error.message.includes("Access denied") ? 403 : 404;
+      res.status(statusCode).json({ error: error.message });
     }
   }
 
   // Update a product
   async updateProduct(req, res) {
     try {
+      const sellerId = req.seller ? (req.seller.id || req.seller._id) : null;
       const product = await ProductService.updateProduct(
         req.params.productId,
-        req.body
+        req.body,
+        sellerId
       );
 
       res.status(200).json(product);
     } catch (error) {
-      res.status(404).json({ error: error.message });
+      const statusCode = error.message.includes("Access denied") ? 403 : 404;
+      res.status(statusCode).json({ error: error.message });
     }
   }
 
@@ -79,14 +94,6 @@ class SellerProductController {
       const product = await ProductService.findProductById(
         req.params.productId
       );
-      const host = req.get('host');
-      const protocol = req.protocol;
-      const mapImage = (img) => {
-        if (!img) return img;
-        if (img.startsWith('http://') || img.startsWith('https://')) return img;
-        const parts = img.split('/').map(encodeURIComponent).join('/');
-        return `${protocol}://${host}/product-images/${parts}`;
-      };
       const mapped = { ...(product.toObject ? product.toObject() : product), images: (product.images || []).map(mapImage) };
       res.status(200).json(mapped);
     } catch (error) {
@@ -99,14 +106,6 @@ class SellerProductController {
     try {
       const query = req.query.query || req.query.q || req.query.keyword || req.query.search || "";
       const products = await ProductService.searchProduct(query);
-      const host = req.get('host');
-      const protocol = req.protocol;
-      const mapImage = (img) => {
-        if (!img) return img;
-        if (img.startsWith('http://') || img.startsWith('https://')) return img;
-        const parts = img.split('/').map(encodeURIComponent).join('/');
-        return `${protocol}://${host}/product-images/${parts}`;
-      };
       const mapped = products.map(p => ({ ...(p.toObject ? p.toObject() : p), images: (p.images || []).map(mapImage) }));
       return res.status(200).json(mapped);
     } catch (error) {
@@ -118,14 +117,6 @@ class SellerProductController {
     try {
       const products = await ProductService.getAllProducts(req.query);
       // products is paginated response: { content, totalPages, totalElements }
-      const host = req.get('host');
-      const protocol = req.protocol;
-      const mapImage = (img) => {
-        if (!img) return img;
-        if (img.startsWith('http://') || img.startsWith('https://')) return img;
-        const parts = img.split('/').map(encodeURIComponent).join('/');
-        return `${protocol}://${host}/product-images/${parts}`;
-      };
       const mappedContent = (products.content || []).map(p => ({ ...p.toObject ? p.toObject() : p, images: ((p.images || [])).map(mapImage) }));
       const resp = { ...products, content: mappedContent };
       res.status(200).json(resp);

@@ -11,7 +11,7 @@ import NotFound from '../customer/pages/NotFound/NotFound';
 import Auth from '../customer/pages/Auth/Auth';
 import { useAppDispatch, useAppSelector } from '../Redux Toolkit/Store';
 import { fetchUserCart } from '../Redux Toolkit/Customer/CartSlice';
-import PaymentSuccessHandler from '../customer/pages/Pyement/PaymentSuccessHandler';
+import PaymentSuccessHandler from '../customer/pages/Payment/PaymentSuccessHandler';
 import Reviews from '../customer/pages/Review/Reviews';
 import WriteReviews from '../customer/pages/Review/WriteReview';
 import Wishlist from '../customer/pages/Wishlist/Wishlist';

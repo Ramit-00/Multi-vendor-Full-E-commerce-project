@@ -34,8 +34,9 @@ class OrderController {
             await PaymentService.setPaymentLinkId(paymentOrder._id, paymentUrlId);
 
         } else if (paymentMethod === PaymentMethod.STRIPE) {
-            const paymentUrl = await PaymentService.createStripePaymentLink(user, paymentOrder.amount, paymentOrder._id);
-            response.payment_link_url = paymentUrl;
+            const payment = await PaymentService.createStripePaymentLink(user, paymentOrder.amount, paymentOrder._id);
+            response.payment_link_url = payment.url;
+            await PaymentService.setPaymentLinkId(paymentOrder._id, payment.id);
         }
 
        
@@ -53,9 +54,17 @@ class OrderController {
     try {
       const { orderId } = req.params;
       const order = await OrderService.findOrderById(orderId);
+      const reqUserId = String(req.user?.id || req.user?._id || '');
+      const reqRole = req.user?.role;
+      const orderUserId = String(order.userId || order.user?.id || order.user?._id || order.user || '');
+
+      if (reqRole !== 'ROLE_ADMIN' && orderUserId && reqUserId && orderUserId !== reqUserId) {
+        return res.status(403).json({ error: "Access denied: You are not authorized to view this order" });
+      }
+
       return res.status(200).json(order);
     } catch (error) {
-        return res.status(401).json({error:error.message});
+      return res.status(404).json({ error: error.message });
     }
   }
 
@@ -130,10 +139,19 @@ class OrderController {
   async deleteOrder(req, res, next) {
     try {
       const { orderId } = req.params;
+      const reqUserId = String(req.user?.id || req.user?._id || '');
+      const reqRole = req.user?.role;
+      const order = await OrderService.findOrderById(orderId);
+      const orderUserId = String(order.userId || order.user?.id || order.user?._id || order.user || '');
+
+      if (reqRole !== 'ROLE_ADMIN' && orderUserId && reqUserId && orderUserId !== reqUserId) {
+        return res.status(403).json({ error: "Access denied: You are not authorized to delete this order" });
+      }
+
       await OrderService.deleteOrder(orderId);
       return res.status(200).json({ message: "Order deleted successfully" });
     } catch (error) {
-       return res.status(401).json({error:error.message});
+      return res.status(404).json({ error: error.message });
     }
   }
 }

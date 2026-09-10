@@ -7,6 +7,32 @@ const ProductDetails = require('../models/ProductDetails');
 const Category = require('../models/Category');
 const ProductError = require('../exceptions/ProductError');
 
+let cloudinaryImageMap = {};
+try {
+  cloudinaryImageMap = require('../config/cloudinaryImageMap.json');
+} catch (e) {
+  cloudinaryImageMap = {};
+}
+
+function resolveCloudinaryUrl(imagePath) {
+  if (!imagePath || typeof imagePath !== 'string') return imagePath;
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://') || imagePath.startsWith('data:')) {
+    return imagePath;
+  }
+  if (cloudinaryImageMap[imagePath]) return cloudinaryImageMap[imagePath];
+  if (cloudinaryImageMap[imagePath.toLowerCase()]) return cloudinaryImageMap[imagePath.toLowerCase()];
+  const basename = imagePath.split(/[/\\]/).pop();
+  if (cloudinaryImageMap[basename]) return cloudinaryImageMap[basename];
+  if (cloudinaryImageMap[basename.toLowerCase()]) return cloudinaryImageMap[basename.toLowerCase()];
+  return imagePath;
+}
+
+function isSellerSuspended(seller) {
+  if (!seller) return false;
+  const status = (seller.verificationStatus || seller.accountStatus || seller.status || '').toUpperCase();
+  return status === 'SUSPENDED' || status === 'BANNED' || status === 'DEACTIVATED';
+}
+
 const calculateDiscountPercentage = (mrpPrice, sellingPrice) => {
   if (mrpPrice <= 0) {
     return 0;
@@ -38,6 +64,7 @@ class ProductService {
       ? seller.payoutAccountInfo
       : {};
 
+    const sellerStatus = (seller.verificationStatus || seller.accountStatus || 'active').toUpperCase();
     const formattedSeller = {
       id: seller.id || core.sellerId,
       _id: seller.id || core.sellerId,
@@ -45,6 +72,8 @@ class ProductService {
       storeName: seller.storeName || 'Partner Seller',
       email: sellerUser.email || '',
       mobile: sellerUser.phone || '',
+      status: sellerStatus,
+      accountStatus: sellerStatus,
       businessDetails: sellerPayout.businessDetails || { businessName: seller.storeName || 'Partner Seller' },
     };
 
@@ -65,8 +94,21 @@ class ProductService {
       } else if (lowerName.includes('shirt')) {
         finalImages = ['Men shirt/Louis-Philippe-Men-Shirts 1.jpg'];
       } else if (lowerName.includes('chess')) {
-        finalImages = ['https://images.unsplash.com/photo-1529699211952-734e80c4d42b?auto=format&fit=crop&q=80&w=800'];
+        finalImages = ['https://res.cloudinary.com/pddxfqxe/image/upload/v1789038165/ecom_products/products/heritage_wooden_chess_set.jpg'];
       }
+    }
+
+    // Resolve all image paths to Cloudinary CDN HTTPS URLs
+    finalImages = finalImages.map(img => resolveCloudinaryUrl(img));
+
+    // Seller suspension check: if product is inactive or seller is suspended/banned, mask images
+    const isSuspended = core.status === 'INACTIVE' ||
+      core.status === 'SUSPENDED' ||
+      isSellerSuspended(seller) ||
+      isSellerSuspended(core.seller);
+
+    if (isSuspended) {
+      finalImages = [];
     }
 
     return {
@@ -200,6 +242,10 @@ class ProductService {
       });
 
       if (core) {
+        if (core.status === 'INACTIVE' || core.status === 'SUSPENDED' || isSellerSuspended(core.seller)) {
+          throw new ProductError('This product is unavailable as the seller account has been suspended.');
+        }
+
         let details = null;
         try {
           details = await ProductDetails.findOne({
@@ -220,6 +266,7 @@ class ProductService {
         return this._formatFullProduct(core, details, category);
       }
     } catch (err) {
+      if (err instanceof ProductError) throw err;
       console.warn('[ProductService] findProductById DB notice:', err.message);
     }
 
@@ -227,7 +274,7 @@ class ProductService {
     throw new ProductError('Product not found');
   }
 
-  async updateProduct(productId, updatedProductData) {
+  async updateProduct(productId, updatedProductData, requestingSellerId = null) {
     try {
       const core = await prisma.product.findFirst({
         where: {
@@ -241,6 +288,10 @@ class ProductService {
 
       if (!core) {
         throw new ProductError('Product not found');
+      }
+
+      if (requestingSellerId && core.sellerId && String(core.sellerId) !== String(requestingSellerId)) {
+        throw new ProductError('Access denied: You are not authorized to update this product');
       }
 
       const coreUpdates = {};
@@ -287,7 +338,7 @@ class ProductService {
     }
   }
 
-  async deleteProduct(productId) {
+  async deleteProduct(productId, requestingSellerId = null) {
     try {
       const core = await prisma.product.findFirst({
         where: {
@@ -299,7 +350,28 @@ class ProductService {
         },
       });
 
+      if (!core) {
+        throw new ProductError('Product not found');
+      }
+
+      if (requestingSellerId && core.sellerId && String(core.sellerId) !== String(requestingSellerId)) {
+        throw new ProductError('Access denied: You are not authorized to delete this product');
+      }
+
       if (core) {
+        // Purge associated product images from Cloudinary storage to reclaim space
+        try {
+          const details = await ProductDetails.findOne({
+            $or: [{ productId: core.id }, ...(core.mongoDetailsId ? [{ _id: core.mongoDetailsId }] : [])],
+          });
+          if (details && Array.isArray(details.images) && details.images.length > 0) {
+            const { deleteImages } = require('../config/cloudinary');
+            await deleteImages(details.images);
+          }
+        } catch (imgErr) {
+          console.warn('[ProductService] Cloudinary asset cleanup notice:', imgErr.message);
+        }
+
         await prisma.product.delete({ where: { id: core.id } });
         try {
           await ProductDetails.deleteMany({
@@ -485,7 +557,12 @@ class ProductService {
     let dbProducts = [];
 
     try {
-      const where = {};
+      const where = {
+        status: { not: 'INACTIVE' },
+        seller: {
+          verificationStatus: { notIn: ['suspended', 'banned'] }
+        }
+      };
       if (req.minPrice) where.price = { ...(where.price || {}), gte: Number(req.minPrice) };
       if (req.maxPrice) where.price = { ...(where.price || {}), lte: Number(req.maxPrice) };
       if (req.stock) where.stockQuantity = { gte: Number(req.stock) };
@@ -599,6 +676,10 @@ class ProductService {
     try {
       const cores = await prisma.product.findMany({
         where: {
+          status: { not: 'INACTIVE' },
+          seller: {
+            verificationStatus: { notIn: ['suspended', 'banned'] }
+          },
           OR: [
             { name: { contains: cleanQuery, mode: 'insensitive' } },
             { sku: { contains: cleanQuery, mode: 'insensitive' } },
@@ -681,7 +762,24 @@ class ProductService {
     const baseImagesDir = path.join(__dirname, '..', '..', '..', 'product images');
     const allProducts = [];
 
-    const getFiles = (dir) => {
+    const getFiles = (dir, folderName) => {
+      // Priority 1: Check cloudinaryImageMap entries
+      if (folderName && cloudinaryImageMap) {
+        const prefix = folderName.toLowerCase() + '/';
+        const matchingFiles = new Set();
+        Object.keys(cloudinaryImageMap).forEach(key => {
+          const lowerKey = key.toLowerCase();
+          if (lowerKey.startsWith(prefix) && !key.includes('\\') && !key.endsWith('/')) {
+            const sub = key.slice(folderName.length + 1);
+            if (sub && !sub.includes('/')) {
+              matchingFiles.add(sub);
+            }
+          }
+        });
+        if (matchingFiles.size > 0) {
+          return Array.from(matchingFiles);
+        }
+      }
       try {
         if (!fs.existsSync(dir)) return [];
         return fs.readdirSync(dir).filter(f => !f.startsWith('.') && fs.statSync(path.join(dir, f)).isFile());
@@ -691,7 +789,7 @@ class ProductService {
     };
 
     // 1. Men Shirts (4 products)
-    const shirtFiles = getFiles(path.join(baseImagesDir, 'Men shirt'));
+    const shirtFiles = getFiles(path.join(baseImagesDir, 'Men shirt'), 'Men shirt');
     const shirtTitles = [
       "Louis Philippe Tailored Fit Formal Solid Shirt",
       "Louis Philippe Azure Slim Fit Executive Shirt",
@@ -724,7 +822,7 @@ class ProductService {
     });
 
     // 2. Men T-Shirts (3 products)
-    const tshirtFiles = getFiles(path.join(baseImagesDir, 'men tshirt'));
+    const tshirtFiles = getFiles(path.join(baseImagesDir, 'men tshirt'), 'men tshirt');
     const tshirtTitles = [
       "Urban Active Crew Neck Bio-Washed T-Shirt",
       "Graphic Streetwear Slim Fit Cotton T-Shirt",
@@ -756,7 +854,7 @@ class ProductService {
     });
 
     // 3. Mobiles (2 products, 10 images)
-    const mobileFiles = getFiles(path.join(baseImagesDir, 'mobile'));
+    const mobileFiles = getFiles(path.join(baseImagesDir, 'mobile'), 'mobile');
     const mobileGroup1 = mobileFiles.filter(f => f.includes('imagx9eg'));
     const mobileGroup2 = mobileFiles.filter(f => f.includes('imagx9pf'));
 
@@ -975,8 +1073,8 @@ class ProductService {
       toObject: function() { return { ...this }; },
     });
 
-    // 5. Furniture & Dining Runners (3 products)
-    const runnerFiles = getFiles(path.join(baseImagesDir, 'furniture'));
+    // 5. Furniture & Dining (1 product, 10 images)
+    const runnerFiles = getFiles(path.join(baseImagesDir, 'furniture'), 'furniture');
     const runnerTitles = [
       "Royal Damask Embroidered Dining Table Runner (6 Seater)",
       "Artisan Handwoven Linen Cotton Dining Table Runner",
@@ -1453,6 +1551,12 @@ class ProductService {
       seller: { businessDetails: { businessName: "Vedic Weaves" }, sellerName: "Vedic Weaves" },
       createdAt: new Date('2025-01-28'),
       toObject: function() { return { ...this }; },
+    });
+
+    allProducts.forEach(p => {
+      if (Array.isArray(p.images)) {
+        p.images = p.images.map(resolveCloudinaryUrl);
+      }
     });
 
     this._cachedCategoryProducts = allProducts;

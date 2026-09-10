@@ -269,13 +269,24 @@ class UserService {
 
   async deleteAddress(currentUser, addressId) {
     const email = (currentUser?.email || '').toLowerCase().trim();
-    const userId = currentUser?.id || currentUser?._id;
+    let userId = currentUser?.id || currentUser?._id;
+
+    if (!userId || String(userId).startsWith('offline_')) {
+      try {
+        const dbUser = await prisma.user.findUnique({ where: { email } });
+        if (dbUser) userId = dbUser.id;
+      } catch (e) {}
+    }
+
+    if (!userId) {
+      throw new UserError('User account not found to delete address');
+    }
 
     try {
       await prisma.address.deleteMany({
         where: {
           id: String(addressId),
-          ...(userId && !String(userId).startsWith('offline_') ? { userId: String(userId) } : {}),
+          userId: String(userId),
         },
       });
     } catch (e) {

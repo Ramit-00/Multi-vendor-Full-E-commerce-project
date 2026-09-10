@@ -7,6 +7,15 @@ const generateOTP = require("../utils/generateOtp");
 const jwtProvider = require("../utils/jwtProvider");
 const { sendVerificationEmail } = require("../utils/sendEmail");
 const bcrypt = require("bcrypt");
+const mongoose = require("mongoose");
+const VerificationCode = require("../models/VerificationCode");
+
+const isDbConnected = () => mongoose && mongoose.connection && mongoose.connection.readyState === 1;
+
+// Helper to look up seller by email via unified SellerService
+const findSellerByEmail = async (email) => {
+  return await SellerService.getSellerByEmail(email);
+};
 
 // Set to remember verified emails in-memory for the registration session
 const verifiedEmails = new Set();
@@ -59,12 +68,6 @@ class SellerController {
           await VerificationService.createVerificationCode(otp, mobile.trim());
         } catch (e) {}
       }
-
-      // Log to console
-      console.log(`\n========================================`);
-      console.log(`📧 [SELLER VERIFICATION] OTP for ${normalizedEmail}: ${otp}`);
-      if (mobile) console.log(`📱 Associated Mobile: ${mobile}`);
-      console.log(`========================================\n`);
 
       // Dispatch verification email via Gmail SMTP
       const subject = "Your Seller Partner Verification Code - E-COM";
@@ -142,11 +145,15 @@ class SellerController {
         });
       }
 
-      if (seller.password) {
-        const isMatch = await bcrypt.compare(password, seller.password);
-        if (!isMatch) {
-          return res.status(400).json({ message: "Incorrect store password. Please verify your credentials or use Forgot Password." });
-        }
+      if (!seller.password) {
+        return res.status(400).json({
+          message: "No store password configured for this seller account. Please authenticate via OTP or use Forgot Password to establish a secure password."
+        });
+      }
+
+      const isMatch = await bcrypt.compare(password, seller.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: "Incorrect store password. Please verify your credentials or use Forgot Password." });
       }
 
       const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
@@ -196,10 +203,6 @@ class SellerController {
         console.warn("Failed to persist email verification code:", e.message);
       }
 
-      console.log(`\n========================================`);
-      console.log(`📧 [SELLER LOGIN VERIFICATION] OTP for ${normalizedEmail}: ${otp}`);
-      console.log(`========================================\n`);
-
       const subject = "Your Seller Portal Login Verification Code - E-COM";
       const body = `Your 6-digit verification code to access your seller account on E-COM is: ${otp}`;
       
@@ -235,10 +238,6 @@ class SellerController {
         console.warn("Failed to persist reset verification code:", e.message);
       }
 
-      console.log(`\n========================================`);
-      console.log(`🔑 [SELLER PASSWORD RESET] OTP for ${normalizedEmail}: ${otp}`);
-      console.log(`========================================\n`);
-
       const subject = "Reset Your Seller Password - E-COM";
       const body = `Your verification code to reset your seller password is: ${otp}. This code expires in 10 minutes.`;
 
@@ -272,7 +271,7 @@ class SellerController {
       } else {
         record = await VerificationService.getVerificationCode(normalizedEmail);
       }
-      const isValid = (record && record.otp === otp) || otp === "123456";
+      const isValid = Boolean(record && record.otp === otp);
 
       if (!isValid) {
         return res.status(400).json({ message: "Invalid or expired OTP. Please check your email and try again." });
@@ -321,7 +320,7 @@ class SellerController {
       }
 
       // Check OTP matching
-      const isValid = (record && record.otp === otp) || otp === "123456";
+      const isValid = Boolean(record && record.otp === otp);
 
       if (!isValid) {
         return res.status(400).json({ message: "Invalid or expired OTP. Please check your email and try again." });
@@ -389,7 +388,7 @@ class SellerController {
         } else {
           record = await VerificationService.getVerificationCode(normalizedEmail);
         }
-        if ((record && record.otp === otp) || otp === "123456") {
+        if (record && record.otp === otp) {
           isVerified = true;
           if (isDbConnected() && record) {
             await VerificationCode.deleteOne({ _id: record._id }).catch(() => {});
@@ -423,7 +422,7 @@ class SellerController {
     } catch (err) {
       console.error("Create seller error:", err);
       res
-        .status(err instanceof SellerError ? 400 : 500)
+        .status(err.statusCode || err.status || 400)
         .json({ error: err.message || "Failed to create seller" });
     }
   }
@@ -445,25 +444,36 @@ class SellerController {
         throw new SellerError("No seller account found with these details.");
       }
 
-      // Verify OTP
-      if (otp) {
-        let vEmail = null;
-        if (normalizedEmail) {
-          if (isDbConnected()) {
-            vEmail = await VerificationCode.findOne({ email: normalizedEmail });
-          } else {
-            vEmail = await VerificationService.getVerificationCode(normalizedEmail);
-          }
-        }
-        let vMobile = null;
-        if (mobile && isDbConnected()) {
-          vMobile = await VerificationCode.findOne({ email: mobile });
-        }
-        const validOtp = (vEmail && vEmail.otp === otp) || (vMobile && vMobile.otp === otp) || otp === "123456";
+      if (!otp) {
+        throw new SellerError("OTP is required to log in.");
+      }
 
-        if (!validOtp && (vEmail || normalizedEmail)) {
-          throw new Error("Wrong OTP entered. Please try again.");
+      // Verify OTP
+      let vEmail = null;
+      if (normalizedEmail) {
+        if (isDbConnected()) {
+          vEmail = await VerificationCode.findOne({ email: normalizedEmail });
+        } else {
+          vEmail = await VerificationService.getVerificationCode(normalizedEmail);
         }
+      }
+      let vMobile = null;
+      if (mobile && isDbConnected()) {
+        vMobile = await VerificationCode.findOne({ email: mobile });
+      }
+      const validOtp = (vEmail && vEmail.otp === otp) || (vMobile && vMobile.otp === otp);
+
+      if (!validOtp) {
+        throw new SellerError("Wrong OTP entered. Please try again.");
+      }
+
+      // Delete used OTP
+      if (isDbConnected()) {
+        if (vEmail) await VerificationCode.deleteOne({ _id: vEmail._id }).catch(() => {});
+        if (vMobile) await VerificationCode.deleteOne({ _id: vMobile._id }).catch(() => {});
+      } else {
+        if (normalizedEmail) await VerificationService.deleteVerificationCode(normalizedEmail);
+        if (mobile) await VerificationService.deleteVerificationCode(mobile);
       }
 
       const token = jwtProvider.createJwt({ email: seller.email, role: UserRoles.SELLER, type: 'SELLER' });
@@ -476,7 +486,7 @@ class SellerController {
       });
     } catch (err) {
       res
-        .status(err instanceof SellerError ? 400 : 500)
+        .status(err.statusCode || err.status || 400)
         .json({ message: err.message });
     }
   }

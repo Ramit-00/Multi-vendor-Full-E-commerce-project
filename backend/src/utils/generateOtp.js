@@ -1,8 +1,8 @@
-// utils/generateOtp.js
+const crypto = require('crypto');
 
-// OTP generation
+// Cryptographically secure 6-digit OTP generation
 function generateOTP() {
-    return Math.floor(100000 + Math.random() * 900000).toString(); // Generates a 6-digit OTP
+    return crypto.randomInt(100000, 1000000).toString();
 }
 
 module.exports = generateOTP;

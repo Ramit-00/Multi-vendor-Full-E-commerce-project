@@ -3,12 +3,15 @@ const ChatbotService = require("../services/ChatbotService.js");
 class ChatboatController {
   async simpleChat(req, res) {
     try {
-      const message = req.body.message || req.body.prompt || req.body.question;
+      let message = String(req.body.message || req.body.prompt || req.body.question || "Hello").trim();
+      if (message.length > 1000) {
+        message = message.substring(0, 1000);
+      }
 
       const contents = [
         {
           role: "user",
-          parts: [{ text: message || "Hello" }],
+          parts: [{ text: message }],
         },
       ];
 
@@ -23,10 +26,13 @@ class ChatboatController {
   async askProductQuestionController(req, res) {
     try {
       const { productId } = req.params;
-      const question = req.body.question || req.body.message || req.body.prompt;
+      let question = String(req.body.question || req.body.message || req.body.prompt || "").trim();
 
       if (!question) {
         return res.status(400).json({ message: "Question is required" });
+      }
+      if (question.length > 1000) {
+        question = question.substring(0, 1000);
       }
 
       if (!productId || productId === "undefined" || productId === "null") {

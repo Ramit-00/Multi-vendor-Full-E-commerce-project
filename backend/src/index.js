@@ -6,18 +6,70 @@ const cors = require('cors');
 
 
 const app = express();
-app.use(cors());
 
-const path = require('path');
-// Serve product images from the workspace-level "product images" folder
-const productImagesPath = path.join(__dirname, '..', '..', 'product images');
-app.use('/product-images', express.static(productImagesPath));
+// Allowed Origins Whitelist
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+].filter(Boolean);
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Blocked by CORS policy'));
+    }
+  },
+  credentials: true,
+}));
+
+// Standard Security Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+
+const prisma = require('./config/prisma');
 
 app.get('/', (req, res) => {
   res.send({message:'Welcome To E-COM Backend System!'});
 });
 
-app.use(bodyParser.json());
+app.get('/health', async (req, res) => {
+  let pgStatus = 'unknown';
+  let mongoStatus = 'unknown';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    pgStatus = 'connected';
+  } catch (err) {
+    pgStatus = 'disconnected';
+  }
+
+  const mongoose = require('mongoose');
+  mongoStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+
+  const isHealthy = pgStatus === 'connected' && (mongoStatus === 'connected' || process.env.ALLOW_OFFLINE === 'true');
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    databases: {
+      postgresql: pgStatus,
+      mongodb: mongoStatus,
+    },
+    uptime: process.uptime(),
+  });
+});
+
+app.use(bodyParser.json({ limit: '2mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
 
 const productRouters=require("./routers/productRoutes.js")
 const authRouters=require("./routers/authRouters.js")
@@ -40,7 +92,19 @@ const chatboatRouters=require("./routers/chatboatRoutes.js")
 const reviewRouters=require("./routers/reviewRouters.js")
 const notificationRouters=require("./routers/notificationRoutes.js")
 
-app.use('/auth', authRouters);
+const { authLimiter, apiLimiter, chatbotLimiter } = require("./middleware/rateLimiter.js");
+
+// Apply general API rate limiter
+app.use(apiLimiter);
+
+// Sensitive Auth Rate Limiters (brute force and credential stuffing defense)
+app.use('/auth', authLimiter, authRouters);
+app.use('/admin/auth', authLimiter);
+app.use('/sellers/login', authLimiter);
+app.use('/sellers/verify', authLimiter);
+app.use('/sellers/sent', authLimiter);
+app.use('/sellers/forgot-password', authLimiter);
+
 app.use("/api/users",userRouters)
 app.use("/sellers", sellerRouters)
 app.use("/products", productRouters)
@@ -63,10 +127,18 @@ app.use("/api/sellers/revenue",revenueRouters)
 app.use("/api/reviews",reviewRouters)
 app.use("/api/notifications",notificationRouters)
 
-// chatboat
-app.use("/chat",chatboatRouters)
+// AI Chatbot Rate Limiter (Gemini API quota protection)
+app.use("/chat", chatbotLimiter, chatboatRouters)
 
-const prisma = require('./config/prisma');
+// Centralized Global Error Handler (prevents leaking internal stack traces in production)
+app.use((err, req, res, next) => {
+  console.error('[Unhandled Request Error]', err.message);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    message: process.env.NODE_ENV === 'production' ? 'Internal server error occurred' : err.message,
+  });
+});
+
 const { disconnectMongo } = require('./config/mongoose');
 
 const port = process.env.PORT || 8080;

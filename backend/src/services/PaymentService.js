@@ -1,10 +1,22 @@
 const Razorpay = require('razorpay');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
 const prisma = require('../config/prisma');
 const PaymentStatus = require('../domain/PaymentStatus');
 const PaymentOrderStatus = require('../domain/PaymentOrderStatus');
 const OrderStatus = require('../domain/OrderStatus');
-const razorpay = require("../config/razorpayClient");
+
+const getStripe = () => {
+  const stripeKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_API_KEY || 'sk_test_placeholder';
+  return require('stripe')(stripeKey);
+};
+
+const getRazorpay = () => {
+  const apiKey = process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_API_KEY || 'rzp_test_placeholder';
+  const apiSecret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || 'secret_placeholder';
+  return new Razorpay({
+    key_id: apiKey,
+    key_secret: apiSecret,
+  });
+};
 
 class PaymentService {
   constructor() {
@@ -81,13 +93,22 @@ class PaymentService {
   }
 
   async getPaymentOrderByPaymentId(paymentId) {
-    for (const po of this.inMemoryPaymentOrders.values()) {
-      if (po.paymentLinkId === paymentId) return po;
+    if (!paymentId) {
+      return null;
     }
 
-    // Lookup in Postgres
+    for (const po of this.inMemoryPaymentOrders.values()) {
+      if (po.paymentLinkId === paymentId || po.id === paymentId) return po;
+    }
+
+    // Lookup in Postgres by gateway transaction or order id
     const payment = await prisma.payment.findFirst({
-      where: { gatewayTransactionId: String(paymentId) },
+      where: {
+        OR: [
+          { gatewayTransactionId: String(paymentId) },
+          { orderId: String(paymentId) },
+        ],
+      },
     });
     if (payment) {
       return {
@@ -100,7 +121,7 @@ class PaymentService {
       };
     }
 
-    // Fallback mock payment order to prevent blocking flow
+    // Fallback payment order to prevent blocking legitimate flows
     return {
       id: `po_${Date.now()}`,
       _id: `po_${Date.now()}`,
@@ -112,23 +133,51 @@ class PaymentService {
   }
 
   async proceedPaymentOrder(paymentOrder, paymentId, paymentLinkId) {
-    if (!paymentOrder || paymentOrder.status === PaymentOrderStatus.SUCCESS) {
+    if (!paymentOrder) {
+      return false;
+    }
+
+    if (paymentOrder.status === PaymentOrderStatus.SUCCESS) {
       return true;
     }
 
     let isCaptured = false;
+    let gatewayName = 'RAZORPAY';
+    let transactionRef = paymentId || paymentLinkId;
 
-    // Verify with Razorpay if configured
-    try {
-      const payment = await razorpay.payments.fetch(paymentId);
-      if (payment && payment.status === 'captured') {
-        isCaptured = true;
+    const isStripe = (paymentId && String(paymentId).startsWith('cs_')) ||
+                     (paymentLinkId && String(paymentLinkId).startsWith('cs_'));
+
+    if (isStripe) {
+      gatewayName = 'STRIPE';
+      try {
+        const stripe = getStripe();
+        const sessionId = String(paymentId).startsWith('cs_') ? paymentId : paymentLinkId;
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        if (session && (session.payment_status === 'paid' || session.status === 'complete')) {
+          isCaptured = true;
+          transactionRef = session.payment_intent || session.id;
+        }
+      } catch (stripeErr) {
+        console.warn('[PaymentService] Stripe session verify check:', stripeErr.message);
+        if (process.env.NODE_ENV === 'test') {
+          isCaptured = true;
+        }
       }
-    } catch (rzpErr) {
-      console.warn('[PaymentService] Razorpay fetch check:', rzpErr.message);
-      // In dev/test environments without real API credentials, accept payment
-      if (process.env.NODE_ENV !== 'production' || paymentId.startsWith('pay_test_')) {
-        isCaptured = true;
+    } else {
+      gatewayName = 'RAZORPAY';
+      try {
+        const rzp = getRazorpay();
+        const payment = await rzp.payments.fetch(paymentId);
+        if (payment && (payment.status === 'captured' || payment.status === 'authorized')) {
+          isCaptured = true;
+          transactionRef = payment.id;
+        }
+      } catch (rzpErr) {
+        console.warn('[PaymentService] Razorpay fetch check:', rzpErr.message);
+        if (process.env.NODE_ENV === 'test') {
+          isCaptured = true;
+        }
       }
     }
 
@@ -147,8 +196,8 @@ class PaymentService {
               where: { orderId: { in: paymentOrder.orders } },
               data: {
                 status: 'SUCCESS',
-                gatewayTransactionId: paymentId,
-                paymentGateway: 'RAZORPAY',
+                gatewayTransactionId: transactionRef,
+                paymentGateway: gatewayName,
               },
             }),
           ]);
@@ -158,15 +207,15 @@ class PaymentService {
       }
 
       return true;
-    } else {
-      paymentOrder.status = PaymentOrderStatus.FAILED;
-      return false;
     }
+
+    return false;
   }
 
   async createRazorpayPaymentLink(user, amount, orderId) {
     const apiKey = process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder';
     const apiSecret = process.env.RAZORPAY_KEY_SECRET || 'secret_placeholder';
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
     const razorpays = new Razorpay({
       key_id: apiKey,
@@ -184,7 +233,7 @@ class PaymentService {
         notify: {
           email: true,
         },
-        callback_url: `http://localhost:5173/payment-success/${orderId}`,
+        callback_url: `${frontendBase}/payment-success/${orderId}`,
         callback_method: 'get',
       };
 
@@ -192,23 +241,32 @@ class PaymentService {
       return paymentLink;
     } catch (err) {
       console.warn('[PaymentService] Razorpay link generation note:', err.message);
-      return {
-        id: `plink_${Date.now()}`,
-        short_url: `http://localhost:5173/payment-success/${orderId}?paymentLinkId=plink_${Date.now()}`,
-      };
+      if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_OFFLINE === 'true') {
+        return {
+          id: `plink_${Date.now()}`,
+          short_url: `${frontendBase}/payment-success/${orderId}?paymentLinkId=plink_${Date.now()}`,
+        };
+      }
+      throw new Error(`Razorpay gateway unavailable: ${err.message}`);
     }
   }
 
   async createStripePaymentLink(user, amount, orderId) {
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const stripe = getStripe();
+    const currency = (process.env.STRIPE_CURRENCY || 'inr').toLowerCase();
+
     try {
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
+        customer_email: user.email || undefined,
         line_items: [
           {
             price_data: {
-              currency: 'usd',
+              currency,
               product_data: {
                 name: 'E-COM Order Payment',
+                description: `Order ID: ${orderId}`,
               },
               unit_amount: Math.round(Number(amount) * 100),
             },
@@ -216,14 +274,24 @@ class PaymentService {
           },
         ],
         mode: 'payment',
-        success_url: `http://localhost:5173/payment-success/${orderId}?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `http://localhost:5173/payment-cancel`,
+        success_url: `${frontendBase}/payment-success/${orderId}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendBase}/checkout/address?cancelled=true`,
       });
 
-      return session.url;
+      return {
+        id: session.id,
+        url: session.url,
+      };
     } catch (err) {
       console.warn('[PaymentService] Stripe checkout note:', err.message);
-      return `http://localhost:5173/payment-success/${orderId}`;
+      if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_OFFLINE === 'true') {
+        const mockSessionId = `cs_test_${Date.now()}`;
+        return {
+          id: mockSessionId,
+          url: `${frontendBase}/payment-success/${orderId}?session_id=${mockSessionId}`,
+        };
+      }
+      throw new Error(`Stripe gateway unavailable: ${err.message}`);
     }
   }
 }

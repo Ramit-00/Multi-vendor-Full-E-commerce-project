@@ -1,5 +1,5 @@
 // ============================================================
-// Prisma schema — PostgreSQL transactional core (Supabase)
+// Prisma schema ï¿½ PostgreSQL transactional core (Supabase)
 // Covers only entities needing strong consistency, foreign
 // keys, and transactional guarantees: identity, money,
 // inventory, and their relationships.
@@ -67,6 +67,7 @@ model User {
   passwordHash String
   phone        String?
   role         Role     @default(BUYER)
+  status       String   @default("ACTIVE")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

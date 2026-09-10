@@ -222,7 +222,7 @@ class AuthService {
       throw new UserError("OTP expired. Please request a new code.");
     }
 
-    if (verificationCode.otp !== otp && otp !== "123456") {
+    if (verificationCode.otp !== otp) {
       throw new UserError("Incorrect credentials");
     }
 
@@ -238,7 +238,8 @@ class AuthService {
       throw new UserError("An account with this email already exists. Please log in.");
     }
 
-    const passwordHash = await bcrypt.hash(otp || "defaultPass123", 10);
+    const randomSecret = crypto.randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(randomSecret, 10);
     const createdUser = await prisma.user.create({
       data: {
         email,
@@ -326,7 +327,7 @@ class AuthService {
       throw new UserError("Incorrect credentials");
     }
 
-    if (verificationCode.otp !== otp && otp !== "123456") {
+    if (verificationCode.otp !== otp) {
       throw new UserError("Incorrect credentials");
     }
 
