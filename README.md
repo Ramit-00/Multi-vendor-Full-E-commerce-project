@@ -1,49 +1,21 @@
 # Enterprise Multi-Vendor E-Commerce Platform
 
-A production-ready, highly resilient, and scalable **Multi-Vendor E-Commerce Platform** built with a **Polyglot Hybrid Architecture** (PostgreSQL + MongoDB Atlas), zero-local-storage Cloudinary CDN media delivery, enterprise-grade rate limiting & security hardening, and an integrated AI shopping assistant powered by Google Gemini.
+A production-grade, highly scalable, and secure full-stack multi-vendor e-commerce platform built with Node.js, Express, React 18, TypeScript, Tailwind CSS, PostgreSQL (via Prisma), MongoDB Atlas (via Mongoose), and Cloudinary.
 
 ---
 
-## Architecture Highlights
+## Architectural Highlights
 
-```
-                       +-----------------------------------+
-                       |    React 18 + TypeScript Client   |
-                       |  Redux Toolkit, Tailwind CSS, MUI |
-                       +-----------------+-----------------+
-                                         |
-                                         | HTTPS / REST API
-                                         v
-                       +-----------------------------------+
-                       |    Express.js Enterprise Server   |
-                       |  Security Shield & Rate Limiters  |
-                       +---------+------------------+------+
-                                 |                  |
-              +------------------+                  +------------------+
-              | (ACID Transactions)                 | (Flexible Models)
-              v                                     v
-+-----------------------------+       +-----------------------------+
-|    PostgreSQL (Prisma 6)    |       |    MongoDB Atlas (Mongoose) |
-|  - Users & Roles            |       |  - Product Deep Details     |
-|  - Verified Sellers         |       |  - Category Taxonomies      |
-|  - Core Catalog & Stock     |       |  - Deals & Flash Sales      |
-|  - Orders & Order Items     |       |  - Verified Reviews         |
-|  - Payments & Transactions  |       |  - AI Chat Sessions         |
-|  - Coupons & Redemptions    |       |  - Customer Notifications   |
-|  - Seller Payout Ledger     |       +-----------------------------+
-+-----------------------------+
-              |
-              +---------------------> Cloudinary CDN (Global Media Delivery)
-```
-
----
-
-## Key Capabilities
-
-### 1. Hybrid Polyglot Database Architecture
-- **PostgreSQL (Prisma 6)**: Houses all transactional and financially sensitive records where ACID compliance is mandatory:
-  - Users, Addresses, Sellers, Product Core, Orders, Order Items, Payments, Coupons, Transactions, and Seller Payouts.
-  - Features atomic stock decrement (`prisma.product.updateMany({ where: { id, stockQuantity: { gte: qty } } })`) preventing race conditions and double-spending.
+### 1. Dual-Database Hybrid Storage Engine
+- **PostgreSQL (Prisma ORM)**: Provides ACID-compliant transactional consistency for core financial entities:
+  - Users & Authentication
+  - Sellers & Onboarding State
+  - Addresses & Customer Profiles
+  - Products, Variants & Inventory
+  - Orders, Order Items & Stock Reservations
+  - Payments, Razorpay Orders & Stripe Transactions
+  - Coupons, Discounts & Redemptions
+  - Seller Payouts & Commission Ledgers
 - **MongoDB Atlas (Mongoose)**: Manages flexible document structures, hierarchical categories, product specifications/attributes, real-time chat sessions, and asynchronous notification caches.
 
 ### 2. Cloudinary CDN & Zero-Local-Storage Architecture
@@ -155,8 +127,8 @@ CLOUDINARY_API_SECRET="your_api_secret"
 
 # Master Administrator Credentials
 ADMIN_SECRET_KEY="your_master_secret_key"
-ADMIN_EMAIL="admin@ecom.com"
-ADMIN_PASSWORD="YourSecurePassword123!"
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD="your_admin_password_here"
 
 # Optional Integrations
 GEMINI_API_KEY="your_gemini_api_key"
